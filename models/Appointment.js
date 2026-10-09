@@ -22,6 +22,97 @@ const appointmentSchema = new mongoose.Schema(
       trim: true,
     },
 
+    
+    // ==========================================================
+    // RESCHEDULING
+    // ==========================================================
+
+    originalAppointmentDate: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    originalAppointmentTime: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    proposedAppointmentDate: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    proposedAppointmentTime: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    rescheduleRequestedBy: {
+      type: String,
+      enum: ["Doctor", "Patient", ""],
+      default: "",
+    },
+
+    rescheduleReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    patientResponse: {
+      type: String,
+      enum: [
+        "Pending",
+        "Accepted",
+        "Requested Another Time",
+        ""
+      ],
+      default: "",
+    },
+
+    rescheduleHistory: [
+      {
+        previousDate: {
+          type: String,
+          default: "",
+        },
+
+        previousTime: {
+          type: String,
+          default: "",
+        },
+
+        proposedDate: {
+          type: String,
+          default: "",
+        },
+
+        proposedTime: {
+          type: String,
+          default: "",
+        },
+
+        requestedBy: {
+          type: String,
+          enum: ["Doctor", "Patient"],
+        },
+
+        reason: {
+          type: String,
+          default: "",
+        },
+
+        requestedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     // ==========================================================
     // DOCTOR
     // ==========================================================

@@ -1714,9 +1714,7 @@ paymentId:
 signature:
   "",
 
-          signature:
-
-            "",
+          
 
 
 
@@ -1852,240 +1850,77 @@ signature:
 
 
 
-    return res.status(200).json({
+return res.status(200).json({
+  success: true,
 
+  message: "Doctor appointment payment order created.",
 
+  key: razorpayKeyId,
 
-      success:
+  // IMPORTANT: return appointment ID directly
+  appointmentId: String(appointment._id),
 
-        true,
+  appointment: {
+    id: String(appointment._id),
 
+    doctorId: String(doctor._id),
 
+    doctorName: appointment.doctorName,
 
-      message:
+    appointmentDate: appointment.appointmentDate,
 
-        "Doctor appointment payment order created.",
+    appointmentTime: appointment.appointmentTime,
 
+    consultationType: appointment.consultationType,
 
+    amount: amount,
 
-      key:
+    paymentStatus: "Pending",
 
-        razorpayKeyId,
+    status: appointment.status,
+  },
 
+  order: {
+    id: razorpayOrder.id,
 
+    amount: Number(razorpayOrder.amount),
 
-      appointment: {
+    currency: razorpayOrder.currency || "INR",
 
+    status: razorpayOrder.status || "created",
 
+    receipt: razorpayOrder.receipt || receipt,
+  },
 
-        id:
+  payment: {
+    paymentRecordId: String(paymentRecord._id),
 
-          String(
+    serviceType: "Doctor",
 
-            appointment._id
+    serviceId: String(appointment._id),
 
-          ),
+    amount: amount,
 
+    currency: "INR",
 
+    paymentMethod: "UPI",
 
-        doctorId:
+    status: "Pending",
+  },
+});
 
-          String(
 
-            doctor._id
+  } catch (error) {
+    console.error("CREATE DOCTOR ORDER ERROR:", error);
 
-          ),
-
-
-
-        doctorName:
-
-          appointment.doctorName,
-
-
-
-        appointmentDate:
-
-          appointment.appointmentDate,
-
-
-
-        appointmentTime:
-
-          appointment.appointmentTime,
-
-
-
-        consultationType:
-
-          appointment.consultationType,
-
-
-
-        amount:
-
-          amount,
-
-
-
-        paymentStatus:
-
-          "Pending",
-
-
-
-        status:
-
-          appointment.status,
-
-      },
-
-
-
-
-
-      order: {
-
-
-
-        id:
-
-          razorpayOrder.id,
-
-
-
-        amount:
-
-          Number(
-
-            razorpayOrder.amount
-
-          ),
-
-
-
-        currency:
-
-          razorpayOrder.currency ||
-
-          "INR",
-
-
-
-        status:
-
-          razorpayOrder.status ||
-
-          "created",
-
-
-
-        receipt:
-
-          razorpayOrder.receipt ||
-
-          receipt,
-
-      },
-
-
-
-
-
-      payment: {
-
-
-
-        paymentRecordId:
-
-          String(
-
-            paymentRecord._id
-
-          ),
-
-
-
-        serviceType:
-
-          "Doctor",
-
-
-
-        serviceId:
-
-          String(
-
-            appointment._id
-
-          ),
-
-
-
-        amount:
-
-          amount,
-
-
-
-        currency:
-
-          "INR",
-
-
-
-        paymentMethod:
-
-          "UPI",
-
-
-
-        status:
-
-          "Pending",
-
-      },
-
-    });
-
-
-
-  } catch (error) {
-  console.error("========================================");
-  console.error("CREATE DOCTOR PAYMENT OUTER ERROR");
-  console.error("========================================");
-  console.error("MESSAGE:", error?.message);
-  console.error("NAME:", error?.name);
-  console.error("STACK:", error?.stack);
-
-  if (error?.response?.data) {
-    console.error(
-      "RAZORPAY RESPONSE:",
-      JSON.stringify(error.response.data, null, 2)
-    );
+    return res.status(500).json({
+      success: false,
+      message: "Unable to create doctor appointment payment order.",
+    });
   }
-
-  if (error?.error?.description) {
-    console.error("RAZORPAY DESCRIPTION:", error.error.description);
-  }
-
-  if (error?.error?.reason) {
-    console.error("RAZORPAY REASON:", error.error.reason);
-  }
-
-  console.error("========================================");
-
-  return res.status(500).json({
-    success: false,
-    message:
-      error?.response?.data?.error?.description ||
-      error?.error?.description ||
-      error?.message ||
-      "Unable to create doctor payment order.",
-  });
-}
-
 };
+
+
 
 
 
@@ -2126,7 +1961,6 @@ exports.verifyDoctorPayment = async (
       return res.status(500).json(config);
 
     }
-
 
 
 
