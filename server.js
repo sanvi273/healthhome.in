@@ -219,13 +219,22 @@ app.use(
 
 console.log("Verification routes mounted.");
 
-// ============================================================
-// TEST ROUTE
-// ============================================================
 
-app.get("/", (req, res) => {
-  res.send("HealthHome Backend Running");
-});
+ // ============================================================
+ // TEST ROUTES
+ // ============================================================
+
+ app.get("/", (req, res) => {
+   res.send("HealthHome Backend Running");
+ });
+
+ app.get("/test-doctor-route", (req, res) => {
+   res.json({
+     success: true,
+     message: "Updated server.js is deployed"
+   });
+ });
+
 
 // ============================================================
 // MONGODB
@@ -254,4 +263,6 @@ app.listen(
       `🚀 Server running on port ${PORT}`
     );
   }
+
+  
 );
