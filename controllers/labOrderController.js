@@ -5,7 +5,6 @@ const crypto = require("crypto");
 // ============================================================
 // ADD LAB ORDER
 // ============================================================
-
 const addLabOrder = async (req, res) => {
   try {
     const {
@@ -38,7 +37,6 @@ const addLabOrder = async (req, res) => {
     }
 
     const Lab = require("../models/lab");
-
     const lab = await Lab.findById(labId);
 
     if (!lab) {
@@ -75,13 +73,14 @@ const addLabOrder = async (req, res) => {
       });
     }
 
-    if (finalBookingType === "PRESCRIPTION") {
-      if (!String(prescriptionImage || "").trim()) {
-        return res.status(400).json({
-          success: false,
-          message: "Prescription image is required.",
-        });
-      }
+    if (
+      finalBookingType === "PRESCRIPTION" &&
+      !String(prescriptionImage || "").trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Prescription image is required.",
+      });
     }
 
     const requestedTests = Array.isArray(tests)
@@ -91,9 +90,7 @@ const addLabOrder = async (req, res) => {
       : [];
 
     const uniqueTestNames = [
-      ...new Set(
-        requestedTests.map((name) => name.toLowerCase())
-      ),
+      ...new Set(requestedTests.map((name) => name.toLowerCase())),
     ];
 
     let finalTests = [];
@@ -108,9 +105,7 @@ const addLabOrder = async (req, res) => {
       }
 
       const activeTests = Array.isArray(lab.tests)
-        ? lab.tests.filter(
-            (test) => test.isActive !== false
-          )
+        ? lab.tests.filter((test) => test.isActive !== false)
         : [];
 
       const matchedTests = [];
@@ -118,16 +113,14 @@ const addLabOrder = async (req, res) => {
       for (const requestedLower of uniqueTestNames) {
         const found = activeTests.find(
           (test) =>
-            String(test.testName || "")
-              .trim()
-              .toLowerCase() === requestedLower
+            String(test.testName || "").trim().toLowerCase() ===
+            requestedLower
         );
 
         if (!found) {
           return res.status(400).json({
             success: false,
-            message:
-              `The selected test "${requestedLower}" is not available at this laboratory.`,
+            message: `The selected test "${requestedLower}" is not available at this laboratory.`,
           });
         }
 
@@ -136,8 +129,7 @@ const addLabOrder = async (req, res) => {
         if (!Number.isFinite(price) || price < 0) {
           return res.status(400).json({
             success: false,
-            message:
-              `Invalid price configured for lab test "${found.testName}".`,
+            message: `Invalid price configured for lab test "${found.testName}".`,
           });
         }
 
@@ -145,8 +137,8 @@ const addLabOrder = async (req, res) => {
         totalAmount += price;
       }
 
-      finalTests = matchedTests.map(
-        (test) => String(test.testName).trim()
+      finalTests = matchedTests.map((test) =>
+        String(test.testName).trim()
       );
     } else {
       totalAmount = 0;
@@ -164,14 +156,13 @@ const addLabOrder = async (req, res) => {
       labName: String(lab.name || ""),
       address: String(address || "").trim(),
       notes: String(notes || "").trim(),
-      totalAmount: totalAmount,
+      totalAmount,
       paymentStatus: "Pending",
       razorpayOrderId: "",
       razorpayPaymentId: "",
       razorpaySignature: "",
       paymentRecordId: "",
-      prescriptionImage:
-        String(prescriptionImage || "").trim(),
+      prescriptionImage: String(prescriptionImage || "").trim(),
       collectionMode: finalCollectionMode,
       collectorId: "",
       collectorName: "",
@@ -204,16 +195,11 @@ const addLabOrder = async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error(
-      "ADD LAB ORDER ERROR:",
-      error
-    );
+    console.error("ADD LAB ORDER ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error?.message ||
-        "Unable to create lab booking.",
+      message: error?.message || "Unable to create lab booking.",
     });
   }
 };
@@ -221,25 +207,16 @@ const addLabOrder = async (req, res) => {
 // ============================================================
 // GET ALL LAB ORDERS
 // ============================================================
-
 const getLabOrders = async (req, res) => {
   try {
-    const orders =
-      await LabOrder
-        .find()
-        .sort({
-          createdAt: -1,
-        });
+    const orders = await LabOrder.find().sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
       orders,
     });
   } catch (error) {
-    console.error(
-      "GET LAB ORDERS ERROR:",
-      error
-    );
+    console.error("GET LAB ORDERS ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -251,13 +228,9 @@ const getLabOrders = async (req, res) => {
 // ============================================================
 // GET SINGLE LAB ORDER
 // ============================================================
-
 const getLabOrderById = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
@@ -271,10 +244,7 @@ const getLabOrderById = async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error(
-      "GET SINGLE LAB ORDER ERROR:",
-      error
-    );
+    console.error("GET SINGLE LAB ORDER ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -286,13 +256,9 @@ const getLabOrderById = async (req, res) => {
 // ============================================================
 // ACCEPT LAB BOOKING
 // ============================================================
-
 const acceptLabOrder = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
@@ -304,13 +270,11 @@ const acceptLabOrder = async (req, res) => {
     if (order.status !== "Pending") {
       return res.status(400).json({
         success: false,
-        message:
-          `Order is already ${order.status}`,
+        message: `Order is already ${order.status}`,
       });
     }
 
     order.status = "Accepted";
-
     await order.save();
 
     return res.status(200).json({
@@ -319,10 +283,7 @@ const acceptLabOrder = async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error(
-      "ACCEPT LAB ORDER ERROR:",
-      error
-    );
+    console.error("ACCEPT LAB ORDER ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -334,13 +295,9 @@ const acceptLabOrder = async (req, res) => {
 // ============================================================
 // REJECT LAB BOOKING
 // ============================================================
-
 const rejectLabOrder = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
@@ -350,7 +307,6 @@ const rejectLabOrder = async (req, res) => {
     }
 
     order.status = "Rejected";
-
     await order.save();
 
     return res.status(200).json({
@@ -359,10 +315,7 @@ const rejectLabOrder = async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error(
-      "REJECT LAB ORDER ERROR:",
-      error
-    );
+    console.error("REJECT LAB ORDER ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -374,125 +327,82 @@ const rejectLabOrder = async (req, res) => {
 // ============================================================
 // ASSIGN SAMPLE COLLECTOR
 // ============================================================
-
-const assignSampleCollector = async (
-  req,
-  res
-) => {
+const assignSampleCollector = async (req, res) => {
   try {
-    const {
-      collectorId,
-    } = req.body;
+    const { collectorId } = req.body;
 
     if (!collectorId) {
       return res.status(400).json({
         success: false,
-        message:
-          "Collector ID is required",
+        message: "Collector ID is required",
       });
     }
 
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      order.collectionMode !==
-      "Home Collection"
-    ) {
+    if (order.collectionMode !== "Home Collection") {
       return res.status(400).json({
         success: false,
-        message:
-          "Sample collector is required only for Home Collection",
+        message: "Sample collector is required only for Home Collection",
       });
     }
 
     if (order.status !== "Accepted") {
       return res.status(400).json({
         success: false,
-        message:
-          "Booking must be accepted before assigning collector",
+        message: "Booking must be accepted before assigning collector",
       });
     }
 
-    const collector =
-      await SampleCollector.findById(
-        collectorId
-      );
+    const collector = await SampleCollector.findById(collectorId);
 
     if (!collector) {
       return res.status(404).json({
         success: false,
-        message:
-          "Sample collector not found",
+        message: "Sample collector not found",
       });
     }
 
-    if (
-      collector.status !==
-      "Active"
-    ) {
+    if (collector.status !== "Active") {
       return res.status(400).json({
         success: false,
-        message:
-          "This collector is inactive",
+        message: "This collector is inactive",
       });
     }
 
-    if (
-      collector.availability !==
-      "Available"
-    ) {
+    if (collector.availability !== "Available") {
       return res.status(400).json({
         success: false,
-        message:
-          "This collector is currently busy",
+        message: "This collector is currently busy",
       });
     }
 
-    order.collectorId =
-      collector._id.toString();
-
-    order.collectorName =
-      collector.name;
-
-    order.collectorPhone =
-      collector.phone;
-
-    order.collectorStatus =
-      "Assigned";
-
-    order.status =
-      "Collector Assigned";
+    order.collectorId = collector._id.toString();
+    order.collectorName = collector.name;
+    order.collectorPhone = collector.phone;
+    order.collectorStatus = "Assigned";
+    order.status = "Collector Assigned";
 
     await order.save();
 
-    collector.availability =
-      "Busy";
-
+    collector.availability = "Busy";
     await collector.save();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Sample collector assigned successfully",
+      message: "Sample collector assigned successfully",
       order,
       collector,
     });
   } catch (error) {
-    console.error(
-      "ASSIGN COLLECTOR ERROR:",
-      error
-    );
+    console.error("ASSIGN COLLECTOR ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -504,11 +414,9 @@ const assignSampleCollector = async (
 // ============================================================
 // COLLECTOR ON THE WAY
 // ============================================================
-
 const collectorOnTheWay = async (req, res) => {
   try {
     const { id } = req.params;
-
     const order = await LabOrder.findById(id);
 
     if (!order) {
@@ -525,31 +433,15 @@ const collectorOnTheWay = async (req, res) => {
       });
     }
 
-    // ========================================================
-    // CHANGE ORDER STATUS
-    // ========================================================
-
     order.status = "On The Way";
     order.collectorStatus = "On The Way";
 
-    // ========================================================
-    // GENERATE OTP FOR HOME COLLECTION
-    // ========================================================
-
     if (order.collectionMode === "Home Collection") {
       const otp = generateLabOtp();
-
       const otpHash = hashLabOtp(otp);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      const expiresAt = new Date(
-        Date.now() + 10 * 60 * 1000
-      );
-
-      saveCollectionOtpForDemo(
-        id,
-        otp,
-        expiresAt
-      );
+      saveCollectionOtpForDemo(id, otp, expiresAt);
 
       order.collectionOtpHash = otpHash;
       order.collectionOtpExpiresAt = expiresAt;
@@ -557,78 +449,30 @@ const collectorOnTheWay = async (req, res) => {
       order.collectionOtpVerified = false;
       order.collectionOtpSentAt = new Date();
 
-      console.log(
-        "=========================================="
-      );
-
-      console.log(
-        "NEW LAB COLLECTION OTP GENERATED"
-      );
-
-      console.log(
-        "ORDER ID:",
-        id
-      );
-
-      console.log(
-        "OTP:",
-        otp
-      );
-
-      console.log(
-        "EXPIRES AT:",
-        expiresAt.toISOString()
-      );
-
-      console.log(
-        "=========================================="
-      );
+      console.log("==========================================");
+      console.log("NEW LAB COLLECTION OTP GENERATED");
+      console.log("ORDER ID:", id);
+      console.log("OTP:", otp);
+      console.log("EXPIRES AT:", expiresAt.toISOString());
+      console.log("==========================================");
     }
-
-    // ========================================================
-    // SAVE EVERYTHING
-    // ========================================================
 
     await order.save();
 
-    console.log(
-      "=========================================="
-    );
-
-    console.log(
-      "COLLECTOR ON THE WAY SUCCESS"
-    );
-
-    console.log(
-      "ORDER ID:",
-      id
-    );
-
-    console.log(
-      "STATUS:",
-      order.status
-    );
-
-    console.log(
-      "COLLECTOR STATUS:",
-      order.collectorStatus
-    );
-
-    console.log(
-      "=========================================="
-    );
+    console.log("==========================================");
+    console.log("COLLECTOR ON THE WAY SUCCESS");
+    console.log("ORDER ID:", id);
+    console.log("STATUS:", order.status);
+    console.log("COLLECTOR STATUS:", order.collectorStatus);
+    console.log("==========================================");
 
     return res.status(200).json({
       success: true,
       message: "Collector is on the way",
       order,
     });
-
   } catch (error) {
-    console.error(
-      "COLLECTOR ON WAY ERROR:",
-      error
-    );
+    console.error("COLLECTOR ON WAY ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -640,39 +484,26 @@ const collectorOnTheWay = async (req, res) => {
 // ============================================================
 // SAMPLE COLLECTED
 // ============================================================
-
-const markSampleCollected = async (
-  req,
-  res
-) => {
+const markSampleCollected = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      order.status !==
-      "On The Way"
-    ) {
+    if (order.status !== "On The Way") {
       return res.status(400).json({
         success: false,
-        message:
-          "Collector must be on the way before sample collection",
+        message: "Collector must be on the way before sample collection",
       });
     }
 
     if (
-      order.collectionMode ===
-        "Home Collection" &&
+      order.collectionMode === "Home Collection" &&
       order.collectionOtpVerified !== true
     ) {
       return res.status(400).json({
@@ -682,35 +513,24 @@ const markSampleCollected = async (
       });
     }
 
-    order.status =
-      "Sample Collected";
-
-    order.collectorStatus =
-      "Sample Collected";
+    order.status = "Sample Collected";
+    order.collectorStatus = "Sample Collected";
 
     await order.save();
 
     if (order.collectorId) {
-      await SampleCollector.findByIdAndUpdate(
-        order.collectorId,
-        {
-          availability:
-            "Available",
-        }
-      );
+      await SampleCollector.findByIdAndUpdate(order.collectorId, {
+        availability: "Available",
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message:
-        "Sample collected successfully",
+      message: "Sample collected successfully",
       order,
     });
   } catch (error) {
-    console.error(
-      "SAMPLE COLLECTED ERROR:",
-      error
-    );
+    console.error("SAMPLE COLLECTED ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -722,73 +542,48 @@ const markSampleCollected = async (
 // ============================================================
 // SAMPLE RECEIVED AT LAB
 // ============================================================
-
-const markSampleReceived = async (
-  req,
-  res
-) => {
+const markSampleReceived = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
     if (
-      order.collectionMode ===
-      "Home Collection"
+      order.collectionMode === "Home Collection" &&
+      order.status !== "Sample Collected"
     ) {
-      if (
-        order.status !==
-        "Sample Collected"
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Sample must be collected before receiving it at the laboratory",
-        });
-      }
+      return res.status(400).json({
+        success: false,
+        message:
+          "Sample must be collected before receiving it at the laboratory",
+      });
     }
 
     if (
-      order.collectionMode ===
-      "Visit Laboratory"
+      order.collectionMode === "Visit Laboratory" &&
+      order.status !== "Accepted"
     ) {
-      if (
-        order.status !==
-        "Accepted"
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Booking must be accepted before receiving the sample",
-        });
-      }
+      return res.status(400).json({
+        success: false,
+        message: "Booking must be accepted before receiving the sample",
+      });
     }
 
-    order.status =
-      "Sample Received";
-
+    order.status = "Sample Received";
     await order.save();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Sample received at laboratory",
+      message: "Sample received at laboratory",
       order,
     });
   } catch (error) {
-    console.error(
-      "SAMPLE RECEIVED ERROR:",
-      error
-    );
+    console.error("SAMPLE RECEIVED ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -800,52 +595,34 @@ const markSampleReceived = async (
 // ============================================================
 // START TESTING
 // ============================================================
-
-const startTesting = async (
-  req,
-  res
-) => {
+const startTesting = async (req, res) => {
   try {
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      order.status !==
-      "Sample Received"
-    ) {
+    if (order.status !== "Sample Received") {
       return res.status(400).json({
         success: false,
-        message:
-          "Sample must be received before testing",
+        message: "Sample must be received before testing",
       });
     }
 
-    order.status =
-      "In Progress";
-
+    order.status = "In Progress";
     await order.save();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Testing started",
+      message: "Testing started",
       order,
     });
   } catch (error) {
-    console.error(
-      "START TESTING ERROR:",
-      error
-    );
+    console.error("START TESTING ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -857,91 +634,60 @@ const startTesting = async (
 // ============================================================
 // GENERAL STATUS UPDATE
 // ============================================================
-
-const updateLabOrderStatus = async (
-  req,
-  res
-) => {
+const updateLabOrderStatus = async (req, res) => {
   try {
-    const {
-      status,
-    } = req.body;
+    const { status } = req.body;
 
     if (!status) {
       return res.status(400).json({
         success: false,
-        message:
-          "Status is required",
+        message: "Status is required",
       });
     }
 
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+    const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
     if (
-      status ===
-        "Sample Collected" &&
-      order.collectionMode ===
-        "Home Collection" &&
+      status === "Sample Collected" &&
+      order.collectionMode === "Home Collection" &&
       order.collectionOtpVerified !== true
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP verification is required before sample collection.",
+        message: "OTP verification is required before sample collection.",
       });
     }
 
-    order.status =
-      status;
+    order.status = status;
 
-    if (
-      status ===
-      "Collector Assigned"
-    ) {
-      order.collectorStatus =
-        "Assigned";
+    if (status === "Collector Assigned") {
+      order.collectorStatus = "Assigned";
     }
 
-    if (
-      status ===
-      "On The Way"
-    ) {
-      order.collectorStatus =
-        "On The Way";
+    if (status === "On The Way") {
+      order.collectorStatus = "On The Way";
     }
 
-    if (
-      status ===
-      "Sample Collected"
-    ) {
-      order.collectorStatus =
-        "Sample Collected";
+    if (status === "Sample Collected") {
+      order.collectorStatus = "Sample Collected";
     }
 
     await order.save();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Lab order status updated",
+      message: "Lab order status updated",
       order,
     });
   } catch (error) {
-    console.error(
-      "UPDATE STATUS ERROR:",
-      error
-    );
+    console.error("UPDATE STATUS ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -953,206 +699,127 @@ const updateLabOrderStatus = async (
 // ============================================================
 // UPLOAD LAB REPORT
 // ============================================================
-
-const uploadReport = async (
-  req,
-  res
-) => {
+const uploadReport = async (req, res) => {
   try {
-    const {
-      reports,
-    } = req.body;
+    const { reports } = req.body;
 
     if (!reports) {
       return res.status(400).json({
         success: false,
-        message:
-          "Reports are required",
+        message: "Reports are required",
       });
     }
 
-    let reportList =
-      reports;
+    let reportList = reports;
 
-    if (
-      typeof reports ===
-      "string"
-    ) {
+    if (typeof reports === "string") {
       try {
-        reportList =
-          JSON.parse(
-            reports
-          );
+        reportList = JSON.parse(reports);
       } catch (error) {
         return res.status(400).json({
           success: false,
-          message:
-            "Invalid reports format",
+          message: "Invalid reports format",
         });
       }
     }
 
-    if (
-      !Array.isArray(reportList) ||
-      reportList.length === 0
-    ) {
+    if (!Array.isArray(reportList) || reportList.length === 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "At least one report file is required",
+        message: "At least one report file is required",
       });
     }
 
-    const order =
-      await LabOrder.findById(
-        req.params.id
-      );
+        const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      order.status !==
-      "In Progress"
-    ) {
+    if (order.status !== "In Progress") {
       return res.status(400).json({
         success: false,
-        message:
-          "Testing must be in progress before uploading report",
+        message: "Testing must be in progress before uploading report",
       });
     }
 
-    const cleanedReports =
-      reportList.map(
-        (report, index) => {
-          if (
-            !report ||
-            !report.fileUrl
-          ) {
-            throw new Error(
-              `Report file URL is missing for page ${index + 1}`
-            );
-          }
+    const cleanedReports = reportList.map((report, index) => {
+      if (!report || !report.fileUrl) {
+        throw new Error(
+          `Report file URL is missing for page ${index + 1}`
+        );
+      }
 
-          const reportName =
-            String(
-              report.reportName ||
-              ""
-            ).trim();
+      const reportName = String(report.reportName || "").trim();
 
-          if (!reportName) {
-            throw new Error(
-              `Report name is missing for page ${index + 1}`
-            );
-          }
+      if (!reportName) {
+        throw new Error(
+          `Report name is missing for page ${index + 1}`
+        );
+      }
 
-          return {
-            reportName:
-              reportName,
-            fileName:
-              report.fileName ||
-              `Report_Page_${index + 1}`,
-            fileUrl:
-              report.fileUrl,
-            fileType:
-              report.fileType ||
-              "unknown",
-            pageNumber:
-              Number(
-                report.pageNumber
-              ) ||
-              index + 1,
-          };
-        }
-      );
+      return {
+        reportName,
+        fileName: report.fileName || `Report_Page_${index + 1}`,
+        fileUrl: report.fileUrl,
+        fileType: report.fileType || "unknown",
+        pageNumber: Number(report.pageNumber) || index + 1,
+      };
+    });
 
-    const updatedOrder =
-      await LabOrder.findByIdAndUpdate(
-        req.params.id,
-        {
-          $set: {
-            reports:
-              cleanedReports,
-            reportUploadedAt:
-              new Date(),
-            status:
-              "Completed",
-          },
+    const updatedOrder = await LabOrder.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          reports: cleanedReports,
+          reportUploadedAt: new Date(),
+          status: "Completed",
         },
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     if (!updatedOrder) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found while saving report",
+        message: "Lab order not found while saving report",
       });
     }
 
-    console.log(
-      "================================"
-    );
+    console.log("================================");
+    console.log("LAB REPORT UPLOADED");
+    console.log("ORDER ID =", updatedOrder._id);
+    console.log("TOTAL REPORT FILES =", updatedOrder.reports.length);
 
-    console.log(
-      "LAB REPORT UPLOADED"
-    );
+    updatedOrder.reports.forEach((report) => {
+      console.log(
+        `PAGE ${report.pageNumber}:`,
+        report.reportName,
+        "| FILE:",
+        report.fileName
+      );
+    });
 
-    console.log(
-      "ORDER ID =",
-      updatedOrder._id
-    );
-
-    console.log(
-      "TOTAL REPORT FILES =",
-      updatedOrder.reports.length
-    );
-
-    updatedOrder.reports.forEach(
-      (report) => {
-        console.log(
-          `PAGE ${report.pageNumber}:`,
-          report.reportName,
-          "| FILE:",
-          report.fileName
-        );
-      }
-    );
-
-    console.log(
-      "STATUS =",
-      updatedOrder.status
-    );
-
-    console.log(
-      "================================"
-    );
+    console.log("STATUS =", updatedOrder.status);
+    console.log("================================");
 
     return res.status(200).json({
       success: true,
-      message:
-        "Lab report uploaded successfully",
-      order:
-        updatedOrder,
+      message: "Lab report uploaded successfully",
+      order: updatedOrder,
     });
   } catch (error) {
-    console.error(
-      "UPLOAD REPORT ERROR:",
-      error
-    );
+    console.error("UPLOAD REPORT ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message,
+      message: error.message,
     });
   }
 };
@@ -1160,325 +827,162 @@ const uploadReport = async (
 // ==========================================================
 // LAB COLLECTION OTP HELPERS
 // ==========================================================
-
 const generateLabOtp = () => {
-  return crypto
-    .randomInt(
-      100000,
-      1000000
-    )
-    .toString();
+  return crypto.randomInt(100000, 1000000).toString();
 };
 
 const hashLabOtp = (otp) => {
-  return crypto
-    .createHash("sha256")
-    .update(otp)
-    .digest("hex");
+  return crypto.createHash("sha256").update(otp).digest("hex");
 };
 
 // ==========================================================
 // DEMO OTP STORE
 // ==========================================================
+const collectionOtpStore = new Map();
 
-const collectionOtpStore =
-  new Map();
-
-const saveCollectionOtpForDemo = (
-  orderId,
-  otp,
-  expiresAt
-) => {
-  collectionOtpStore.set(
-    String(orderId),
-    {
-      otp: String(otp),
-      expiresAt:
-        new Date(
-          expiresAt
-        ).getTime(),
-    }
-  );
+const saveCollectionOtpForDemo = (orderId, otp, expiresAt) => {
+  collectionOtpStore.set(String(orderId), {
+    otp: String(otp),
+    expiresAt: new Date(expiresAt).getTime(),
+  });
 };
 
-const getCollectionOtpFromDemoStore = (
-  orderId
-) => {
-  const entry =
-    collectionOtpStore.get(
-      String(orderId)
-    );
+const getCollectionOtpFromDemoStore = (orderId) => {
+  const entry = collectionOtpStore.get(String(orderId));
 
   if (!entry) {
     return null;
   }
 
-  if (
-    Date.now() >
-    entry.expiresAt
-  ) {
-    collectionOtpStore.delete(
-      String(orderId)
-    );
-
+  if (Date.now() > entry.expiresAt) {
+    collectionOtpStore.delete(String(orderId));
     return null;
   }
 
   return entry.otp;
 };
 
-const deleteCollectionOtpFromDemoStore = (
-  orderId
-) => {
-  collectionOtpStore.delete(
-    String(orderId)
-  );
+const deleteCollectionOtpFromDemoStore = (orderId) => {
+  collectionOtpStore.delete(String(orderId));
 };
 
 // ==========================================================
 // GENERATE LAB COLLECTION OTP
 // ==========================================================
-
-const generateCollectionOtp = async (
-  req,
-  res
-) => {
+const generateCollectionOtp = async (req, res) => {
   try {
-    const { id } =
-      req.params;
+    const { id } = req.params;
 
-    console.log(
-      "=========================================="
-    );
+    console.log("==========================================");
+    console.log("LAB COLLECTION OTP REQUEST");
+    console.log("ORDER ID:", id);
+    console.log("SERVER TIME:", new Date().toISOString());
+    console.log("==========================================");
 
-    console.log(
-      "LAB COLLECTION OTP REQUEST"
-    );
-
-    console.log(
-      "ORDER ID:",
-      id
-    );
-
-    console.log(
-      "SERVER TIME:",
-      new Date().toISOString()
-    );
-
-    console.log(
-      "=========================================="
-    );
-
-    const labOrder =
-      await LabOrder.findById(
-        id
-      );
+    const labOrder = await LabOrder.findById(id);
 
     if (!labOrder) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      labOrder.collectionMode !==
-      "Home Collection"
-    ) {
+    if (labOrder.collectionMode !== "Home Collection") {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP is required only for Home Collection",
+        message: "OTP is required only for Home Collection",
       });
     }
 
-    if (
-      labOrder.status !==
-      "On The Way"
-    ) {
+    if (labOrder.status !== "On The Way") {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP can be generated only when the collector is On The Way",
+        message: "OTP can be generated only when the collector is On The Way",
       });
     }
 
-    const now =
-      new Date();
-
-    // ========================================================
-    // CLEAR EXPIRED OTP
-    // ========================================================
+    const now = new Date();
 
     if (
       labOrder.collectionOtpExpiresAt &&
-      labOrder.collectionOtpExpiresAt <=
-        now
+      labOrder.collectionOtpExpiresAt <= now
     ) {
-      labOrder.collectionOtpHash =
-        "";
+      labOrder.collectionOtpHash = "";
+      labOrder.collectionOtpExpiresAt = null;
+      labOrder.collectionOtpAttempts = 0;
+      labOrder.collectionOtpVerified = false;
+      labOrder.collectionOtpSentAt = null;
 
-      labOrder.collectionOtpExpiresAt =
-        null;
-
-      labOrder.collectionOtpAttempts =
-        0;
-
-      labOrder.collectionOtpVerified =
-        false;
-
-      labOrder.collectionOtpSentAt =
-        null;
-
-      deleteCollectionOtpFromDemoStore(
-        id
-      );
-
+      deleteCollectionOtpFromDemoStore(id);
       await labOrder.save();
     }
-
-    // ========================================================
-    // ACTIVE OTP CHECK
-    // ========================================================
 
     if (
       labOrder.collectionOtpHash &&
       labOrder.collectionOtpExpiresAt &&
-      labOrder.collectionOtpExpiresAt >
-        new Date() &&
-      labOrder.collectionOtpVerified !==
-        true
+      labOrder.collectionOtpExpiresAt > new Date() &&
+      labOrder.collectionOtpVerified !== true
     ) {
-      console.log(
-        "ACTIVE OTP ALREADY EXISTS"
-      );
+      console.log("ACTIVE OTP ALREADY EXISTS");
 
-      const existingOtp =
-        getCollectionOtpFromDemoStore(
-          id
-        );
+      const existingOtp = getCollectionOtpFromDemoStore(id);
 
       if (!existingOtp) {
         return res.status(400).json({
           success: false,
           message:
             "OTP is active but is no longer available in server memory. Please generate a new OTP.",
-          expiresAt:
-            labOrder.collectionOtpExpiresAt,
+          expiresAt: labOrder.collectionOtpExpiresAt,
         });
       }
 
       return res.status(200).json({
         success: true,
-        message:
-          "Existing OTP is still active",
-        collectionOtp:
-          existingOtp,
-        expiresAt:
-          labOrder.collectionOtpExpiresAt,
-        alreadyActive:
-          true,
-        testingOnly:
-          true,
+        message: "Existing OTP is still active",
+        collectionOtp: existingOtp,
+        expiresAt: labOrder.collectionOtpExpiresAt,
+        alreadyActive: true,
+        testingOnly: true,
       });
     }
 
-    // ========================================================
-    // GENERATE NEW OTP
-    // ========================================================
+    const otp = generateLabOtp();
+    const otpHash = hashLabOtp(otp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    const otp =
-      generateLabOtp();
+    saveCollectionOtpForDemo(id, otp, expiresAt);
 
-    const otpHash =
-      hashLabOtp(
-        otp
-      );
-
-    const expiresAt =
-      new Date(
-        Date.now() +
-          10 * 60 * 1000
-      );
-
-    // Save plaintext OTP temporarily
-    saveCollectionOtpForDemo(
-      id,
-      otp,
-      expiresAt
-    );
-
-    // Save secure OTP data
-    labOrder.collectionOtpHash =
-      otpHash;
-
-    labOrder.collectionOtpExpiresAt =
-      expiresAt;
-
-    labOrder.collectionOtpAttempts =
-      0;
-
-    labOrder.collectionOtpVerified =
-      false;
-
-    labOrder.collectionOtpSentAt =
-      new Date();
+    labOrder.collectionOtpHash = otpHash;
+    labOrder.collectionOtpExpiresAt = expiresAt;
+    labOrder.collectionOtpAttempts = 0;
+    labOrder.collectionOtpVerified = false;
+    labOrder.collectionOtpSentAt = new Date();
 
     await labOrder.save();
 
-    console.log(
-      "=========================================="
-    );
-
-    console.log(
-      "NEW LAB COLLECTION OTP GENERATED"
-    );
-
-    console.log(
-      "ORDER ID:",
-      id
-    );
-
-    console.log(
-      "OTP:",
-      otp
-    );
-
-    console.log(
-      "EXPIRES AT:",
-      expiresAt.toISOString()
-    );
-
-    console.log(
-      "=========================================="
-    );
+    console.log("==========================================");
+    console.log("NEW LAB COLLECTION OTP GENERATED");
+    console.log("ORDER ID:", id);
+    console.log("OTP:", otp);
+    console.log("EXPIRES AT:", expiresAt.toISOString());
+    console.log("==========================================");
 
     return res.status(200).json({
       success: true,
-      message:
-        "OTP generated successfully",
+      message: "OTP generated successfully",
       expiresAt,
-      otpForTesting:
-        otp,
-      collectionOtp:
-        otp,
-      testingOnly:
-        true,
+      otpForTesting: otp,
+      collectionOtp: otp,
+      testingOnly: true,
     });
-
   } catch (error) {
-    console.error(
-      "GENERATE COLLECTION OTP ERROR:",
-      error
-    );
+    console.error("GENERATE COLLECTION OTP ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to generate collection OTP",
-      error:
-        error.message,
+      message: "Failed to generate collection OTP",
+      error: error.message,
     });
   }
 };
@@ -1486,58 +990,36 @@ const generateCollectionOtp = async (
 // ==========================================================
 // GET LAB COLLECTION OTP
 // ==========================================================
-
-const getCollectionOtp = async (
-  req,
-  res
-) => {
+const getCollectionOtp = async (req, res) => {
   try {
-    const { id } =
-      req.params;
-
-    const labOrder =
-      await LabOrder.findById(
-        id
-      );
+    const { id } = req.params;
+    const labOrder = await LabOrder.findById(id);
 
     if (!labOrder) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      labOrder.collectionMode !==
-      "Home Collection"
-    ) {
+    if (labOrder.collectionMode !== "Home Collection") {
       return res.status(400).json({
         success: false,
-        message:
-          "Collection OTP is available only for Home Collection",
+        message: "Collection OTP is available only for Home Collection",
       });
     }
 
-    if (
-      labOrder.status !==
-      "On The Way"
-    ) {
+    if (labOrder.status !== "On The Way") {
       return res.status(400).json({
         success: false,
-        message:
-          "Collection OTP is available only when collector is On The Way",
+        message: "Collection OTP is available only when collector is On The Way",
       });
     }
 
-    if (
-      labOrder.collectionOtpVerified ===
-      true
-    ) {
+    if (labOrder.collectionOtpVerified === true) {
       return res.status(400).json({
         success: false,
-        message:
-          "Collection OTP has already been verified",
+        message: "Collection OTP has already been verified",
       });
     }
 
@@ -1547,66 +1029,44 @@ const getCollectionOtp = async (
     ) {
       return res.status(404).json({
         success: false,
-        message:
-          "No active collection OTP found. Please generate the OTP first.",
+        message: "No active collection OTP found. Please generate the OTP first.",
       });
     }
 
-    if (
-      new Date() >
-      new Date(
-        labOrder.collectionOtpExpiresAt
-      )
-    ) {
-      deleteCollectionOtpFromDemoStore(
-        id
-      );
+    if (new Date() > new Date(labOrder.collectionOtpExpiresAt)) {
+      deleteCollectionOtpFromDemoStore(id);
 
       return res.status(400).json({
         success: false,
-        message:
-          "Collection OTP has expired. Please generate a new OTP.",
-        expired:
-          true,
+        message: "Collection OTP has expired. Please generate a new OTP.",
+        expired: true,
       });
     }
 
-    const collectionOtp =
-      getCollectionOtpFromDemoStore(
-        id
-      );
+    const collectionOtp = getCollectionOtpFromDemoStore(id);
 
     if (!collectionOtp) {
       return res.status(404).json({
         success: false,
         message:
           "Collection OTP is no longer available in server memory. Please generate a new OTP.",
-        testingOnly:
-          true,
+        testingOnly: true,
       });
     }
 
     return res.status(200).json({
       success: true,
       collectionOtp,
-      collectionOtpExpiresAt:
-        labOrder.collectionOtpExpiresAt,
-      testingOnly:
-        true,
+      collectionOtpExpiresAt: labOrder.collectionOtpExpiresAt,
+      testingOnly: true,
     });
-
   } catch (error) {
-    console.error(
-      "GET COLLECTION OTP ERROR:",
-      error
-    );
+    console.error("GET COLLECTION OTP ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to get collection OTP",
-      error:
-        error.message,
+      message: "Failed to get collection OTP",
+      error: error.message,
     });
   }
 };
@@ -1614,320 +1074,165 @@ const getCollectionOtp = async (
 // ==========================================================
 // VERIFY LAB COLLECTION OTP
 // ==========================================================
-
-const verifyCollectionOtp = async (
-  req,
-  res
-) => {
+const verifyCollectionOtp = async (req, res) => {
   try {
-    const { id } =
-      req.params;
+    const { id } = req.params;
+    const { otp } = req.body;
 
-    const { otp } =
-      req.body;
-
-    console.log(
-      "=========================================="
-    );
-
-    console.log(
-      "LAB COLLECTION OTP VERIFY REQUEST"
-    );
-
-    console.log(
-      "ORDER ID:",
-      id
-    );
-
-    console.log(
-      "=========================================="
-    );
+    console.log("==========================================");
+    console.log("LAB COLLECTION OTP VERIFY REQUEST");
+    console.log("ORDER ID:", id);
+    console.log("==========================================");
 
     if (!otp) {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP is required",
+        message: "OTP is required",
       });
     }
 
-    const enteredOtp =
-      String(otp).trim();
+    const enteredOtp = String(otp).trim();
 
-    if (
-      !/^\d{6}$/.test(
-        enteredOtp
-      )
-    ) {
+    if (!/^\d{6}$/.test(enteredOtp)) {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP must contain exactly 6 digits",
+        message: "OTP must contain exactly 6 digits",
       });
     }
 
-    const labOrder =
-      await LabOrder.findById(
-        id
-      );
+        const labOrder = await LabOrder.findById(id);
 
     if (!labOrder) {
       return res.status(404).json({
         success: false,
-        message:
-          "Lab order not found",
+        message: "Lab order not found",
       });
     }
 
-    if (
-      labOrder.collectionMode !==
-      "Home Collection"
-    ) {
+    if (labOrder.collectionMode !== "Home Collection") {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP verification is required only for Home Collection",
+        message: "OTP verification is required only for Home Collection",
       });
     }
 
-    if (
-      labOrder.status !==
-      "On The Way"
-    ) {
+    if (labOrder.status !== "On The Way") {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP can only be verified when collector is On The Way",
+        message: "OTP can only be verified when collector is On The Way",
       });
     }
 
-    if (
-      labOrder.collectionOtpVerified ===
-      true
-    ) {
+    if (labOrder.collectionOtpVerified === true) {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP has already been verified",
+        message: "OTP has already been verified",
       });
     }
 
-    if (
-      !labOrder.collectionOtpHash
-    ) {
+    if (!labOrder.collectionOtpHash) {
       return res.status(400).json({
         success: false,
-        message:
-          "No active OTP found. Please generate a new OTP.",
+        message: "No active OTP found. Please generate a new OTP.",
       });
     }
-
-    // ========================================================
-    // EXPIRY CHECK
-    // ========================================================
 
     if (
       !labOrder.collectionOtpExpiresAt ||
-      labOrder.collectionOtpExpiresAt <=
-        new Date()
+      labOrder.collectionOtpExpiresAt <= new Date()
     ) {
-      labOrder.collectionOtpHash =
-        "";
+      labOrder.collectionOtpHash = "";
+      labOrder.collectionOtpExpiresAt = null;
+      labOrder.collectionOtpAttempts = 0;
+      labOrder.collectionOtpSentAt = null;
 
-      labOrder.collectionOtpExpiresAt =
-        null;
-
-      labOrder.collectionOtpAttempts =
-        0;
-
-      labOrder.collectionOtpSentAt =
-        null;
-
-      deleteCollectionOtpFromDemoStore(
-        id
-      );
-
+      deleteCollectionOtpFromDemoStore(id);
       await labOrder.save();
 
       return res.status(400).json({
         success: false,
-        message:
-          "OTP has expired. Please generate a new OTP.",
+        message: "OTP has expired. Please generate a new OTP.",
       });
     }
 
-    // ========================================================
-    // MAXIMUM ATTEMPTS
-    // ========================================================
+    const MAX_ATTEMPTS = 5;
 
-    const MAX_ATTEMPTS =
-      5;
-
-    if (
-      labOrder.collectionOtpAttempts >=
-      MAX_ATTEMPTS
-    ) {
+    if (labOrder.collectionOtpAttempts >= MAX_ATTEMPTS) {
       return res.status(429).json({
         success: false,
-        message:
-          "Maximum OTP attempts exceeded. Please generate a new OTP.",
+        message: "Maximum OTP attempts exceeded. Please generate a new OTP.",
       });
     }
 
-    labOrder.collectionOtpAttempts +=
-      1;
+    labOrder.collectionOtpAttempts += 1;
 
-    // ========================================================
-    // HASH ENTERED OTP
-    // ========================================================
+    const enteredOtpHash = hashLabOtp(enteredOtp);
 
-    const enteredOtpHash =
-      hashLabOtp(
-        enteredOtp
-      );
-
-    // ========================================================
-    // WRONG OTP
-    // ========================================================
-
-    if (
-      enteredOtpHash !==
-      labOrder.collectionOtpHash
-    ) {
+    if (enteredOtpHash !== labOrder.collectionOtpHash) {
       await labOrder.save();
 
       const remainingAttempts =
-        MAX_ATTEMPTS -
-        labOrder.collectionOtpAttempts;
+        MAX_ATTEMPTS - labOrder.collectionOtpAttempts;
 
       return res.status(400).json({
         success: false,
-        message:
-          "Incorrect OTP",
+        message: "Incorrect OTP",
         remainingAttempts,
       });
     }
 
-    // ========================================================
-    // OTP CORRECT
-    // ========================================================
+    labOrder.collectionOtpVerified = true;
+    labOrder.status = "Sample Collected";
+    labOrder.collectorStatus = "Sample Collected";
+    labOrder.collectionOtpHash = "";
+    labOrder.collectionOtpExpiresAt = null;
+    labOrder.collectionOtpAttempts = 0;
+    labOrder.collectionOtpSentAt = null;
 
-    labOrder.collectionOtpVerified =
-      true;
+    deleteCollectionOtpFromDemoStore(id);
 
-    labOrder.status =
-      "Sample Collected";
-
-    labOrder.collectorStatus =
-      "Sample Collected";
-
-    // ========================================================
-    // CLEAR OTP DATA
-    // ========================================================
-
-    labOrder.collectionOtpHash =
-      "";
-
-    labOrder.collectionOtpExpiresAt =
-      null;
-
-    labOrder.collectionOtpAttempts =
-      0;
-
-    labOrder.collectionOtpSentAt =
-      null;
-
-    // Remove plaintext OTP from memory
-    deleteCollectionOtpFromDemoStore(
-      id
-    );
-
-    // ========================================================
-    // FREE COLLECTOR
-    // ========================================================
-
-    if (
-      labOrder.collectorId
-    ) {
-      await SampleCollector.findByIdAndUpdate(
-        labOrder.collectorId,
-        {
-          availability:
-            "Available",
-        }
-      );
+    if (labOrder.collectorId) {
+      await SampleCollector.findByIdAndUpdate(labOrder.collectorId, {
+        availability: "Available",
+      });
     }
-
-    // ========================================================
-    // SAVE ORDER
-    // ========================================================
 
     await labOrder.save();
 
-    console.log(
-      "=========================================="
-    );
-
-    console.log(
-      "LAB OTP VERIFIED - SAMPLE COLLECTED"
-    );
-
-    console.log(
-      "ORDER ID:",
-      id
-    );
-
-    console.log(
-      "STATUS:",
-      labOrder.status
-    );
-
-    console.log(
-      "COLLECTOR STATUS:",
-      labOrder.collectorStatus
-    );
-
-    console.log(
-      "=========================================="
-    );
+    console.log("==========================================");
+    console.log("LAB OTP VERIFIED - SAMPLE COLLECTED");
+    console.log("ORDER ID:", id);
+    console.log("STATUS:", labOrder.status);
+    console.log("COLLECTOR STATUS:", labOrder.collectorStatus);
+    console.log("==========================================");
 
     return res.status(200).json({
       success: true,
-      message:
-        "Patient verified successfully. Sample collected.",
-      status:
-        labOrder.status,
-      collectorStatus:
-        labOrder.collectorStatus,
+      message: "Patient verified successfully. Sample collected.",
+      status: labOrder.status,
+      collectorStatus: labOrder.collectorStatus,
     });
-
   } catch (error) {
-    console.error(
-      "VERIFY COLLECTION OTP ERROR:",
-      error
-    );
+    console.error("VERIFY COLLECTION OTP ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to verify collection OTP",
-      error:
-        error.message,
+      message: "Failed to verify collection OTP",
+      error: error.message,
     });
   }
 };
 
-
-/**
- * Cancellation is allowed only before collection starts.
- * Rescheduling requires laboratory approval.
- */
-
+// ==========================================================
+// RESCHEDULING HELPERS AND ENDPOINTS
+// ==========================================================
 const canChangeLabBooking = (order) => {
   return ["Pending", "Accepted"].includes(order.status);
 };
 
+// ==========================================================
 // CANCEL LAB BOOKING
+// ==========================================================
 const cancelLabOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1980,9 +1285,11 @@ const cancelLabOrder = async (req, res) => {
     order.cancelledBy = cancelledBy;
     order.cancelledAt = new Date();
     order.cancellationReason = String(reason || "").trim();
+
     order.rescheduleStatus = "None";
-    order.rescheduleRequestedAt = null;
     order.requestedScheduledAt = null;
+    order.rescheduleRequestedAt = null;
+    order.rescheduleProposedBy = null;
 
     await order.save();
 
@@ -2001,7 +1308,9 @@ const cancelLabOrder = async (req, res) => {
   }
 };
 
+// ==========================================================
 // PATIENT REQUESTS RESCHEDULE
+// ==========================================================
 const requestLabReschedule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2056,11 +1365,12 @@ const requestLabReschedule = async (req, res) => {
       });
     }
 
-    order.previousScheduledAt = order.scheduledAt;
+    order.previousScheduledAt = order.scheduledAt || null;
     order.requestedScheduledAt = requestedDate;
     order.rescheduleRequestedAt = new Date();
     order.rescheduleReason = String(reason || "").trim();
     order.rescheduleStatus = "Pending";
+    order.rescheduleProposedBy = "Patient";
 
     await order.save();
 
@@ -2079,7 +1389,9 @@ const requestLabReschedule = async (req, res) => {
   }
 };
 
-// LAB APPROVES OR REJECTS RESCHEDULE REQUEST
+// ==========================================================
+// LAB APPROVES OR REJECTS A PATIENT'S RESCHEDULE REQUEST
+// ==========================================================
 const decideLabReschedule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2110,11 +1422,12 @@ const decideLabReschedule = async (req, res) => {
 
     if (
       order.rescheduleStatus !== "Pending" ||
+      order.rescheduleProposedBy === "Laboratory" ||
       !canChangeLabBooking(order)
     ) {
       return res.status(400).json({
         success: false,
-        message: "No eligible reschedule request is pending.",
+        message: "No patient reschedule request is pending.",
       });
     }
 
@@ -2129,11 +1442,14 @@ const decideLabReschedule = async (req, res) => {
         });
       }
 
+      order.previousScheduledAt = order.scheduledAt || null;
       order.scheduledAt = order.requestedScheduledAt;
     }
 
     order.rescheduleStatus = decision;
     order.requestedScheduledAt = null;
+    order.rescheduleRequestedAt = null;
+    order.rescheduleProposedBy = null;
 
     await order.save();
 
@@ -2152,11 +1468,180 @@ const decideLabReschedule = async (req, res) => {
   }
 };
 
+// ==========================================================
+// LAB PROPOSES A NEW DATE/TIME
+// ==========================================================
+const proposeLabReschedule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { labId, scheduledAt, reason } = req.body;
 
-// ============================================================
+    if (!labId || !scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Laboratory ID and proposed date/time are required.",
+      });
+    }
+
+    const proposedDate = new Date(scheduledAt);
+
+    if (
+      Number.isNaN(proposedDate.getTime()) ||
+      proposedDate <= new Date()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose a valid date and time in the future.",
+      });
+    }
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (String(order.labId) !== String(labId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Laboratory does not match this booking.",
+      });
+    }
+
+    if (!canChangeLabBooking(order)) {
+      return res.status(400).json({
+        success: false,
+        message: "This booking can no longer be rescheduled.",
+      });
+    }
+
+    if (order.rescheduleStatus === "Pending") {
+      return res.status(400).json({
+        success: false,
+        message: "A reschedule request is already pending.",
+      });
+    }
+
+    order.previousScheduledAt = order.scheduledAt || null;
+    order.requestedScheduledAt = proposedDate;
+    order.rescheduleRequestedAt = new Date();
+    order.rescheduleReason = String(reason || "").trim();
+    order.rescheduleStatus = "Pending";
+    order.rescheduleProposedBy = "Laboratory";
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "New date/time proposed. Waiting for patient response.",
+      order,
+    });
+  } catch (error) {
+    console.error("LAB PROPOSE RESCHEDULE ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to propose a new date/time.",
+    });
+  }
+};
+
+// ==========================================================
+// PATIENT ACCEPTS OR DECLINES THE LAB'S PROPOSAL
+// ==========================================================
+const respondToLabReschedule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { patientId, decision } = req.body;
+
+    if (
+      !patientId ||
+      !["Accepted", "Declined"].includes(decision)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Patient ID and decision "Accepted" or "Declined" are required.',
+      });
+    }
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (String(order.patientId) !== String(patientId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Patient does not match this booking.",
+      });
+    }
+
+    if (
+      order.rescheduleStatus !== "Pending" ||
+      order.rescheduleProposedBy !== "Laboratory" ||
+      !canChangeLabBooking(order)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "No laboratory-proposed date/time is awaiting your response.",
+      });
+    }
+
+    if (decision === "Accepted") {
+      if (
+        !order.requestedScheduledAt ||
+        new Date(order.requestedScheduledAt) <= new Date()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "The proposed date/time is no longer valid. Contact the laboratory.",
+        });
+      }
+
+      order.previousScheduledAt = order.scheduledAt || null;
+      order.scheduledAt = order.requestedScheduledAt;
+      order.rescheduleStatus = "Approved";
+    } else {
+      order.rescheduleStatus = "Rejected";
+    }
+
+    order.requestedScheduledAt = null;
+    order.rescheduleRequestedAt = null;
+    order.rescheduleProposedBy = null;
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        decision === "Accepted"
+          ? "New lab booking date/time accepted."
+          : "Proposed date/time declined. Your original booking remains unchanged.",
+      order,
+    });
+  } catch (error) {
+    console.error("PATIENT RESCHEDULE RESPONSE ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to process your response.",
+    });
+  }
+};
+
+// ==========================================================
 // EXPORTS
-// ============================================================
-
+// ==========================================================
 module.exports = {
   addLabOrder,
   getLabOrders,
@@ -2170,12 +1655,12 @@ module.exports = {
   startTesting,
   updateLabOrderStatus,
   uploadReport,
-
   generateCollectionOtp,
   getCollectionOtp,
   verifyCollectionOtp,
-
-   cancelLabOrder,
+  cancelLabOrder,
   requestLabReschedule,
   decideLabReschedule,
+  proposeLabReschedule,
+  respondToLabReschedule,
 };
