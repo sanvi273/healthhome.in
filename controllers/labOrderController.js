@@ -1413,12 +1413,16 @@ const requestLabReschedule = async (req, res) => {
       });
     }
 
-    if (order.rescheduleStatus === "Pending") {
-      return res.status(409).json({
-        success: false,
-        message: "A reschedule request is already pending.",
-      });
-    }
+   if (
+  order.rescheduleStatus === "Pending" &&
+  order.rescheduleProposedBy === "Laboratory"
+) {
+  return res.status(409).json({
+    success: false,
+    message:
+      "A laboratory proposal is already awaiting the patient's response.",
+  });
+}
 
     order.requestedScheduledAt = requestedDate;
     order.rescheduleRequestedAt = new Date();
@@ -1647,36 +1651,23 @@ const proposeLabReschedule = async (req, res) => {
 // PATIENT ACCEPTS OR DECLINES THE LAB'S PROPOSAL
 // ==========================================================
 
+
 const respondToLabReschedule = async (req, res) => {
   try {
     const { id } = req.params;
-    const { patientId, decision, reason } = req.body;
+    const { patientId, decision } = req.body;
 
-    const normalizedDecision = String(decision || "")
-      .trim()
-      .toLowerCase();
+    const allowedDecisions = [
+      "Accepted",
+      "Declined",
+      "Requested Another Time",
+    ];
 
-    let accepted;
-
-    if (["accepted", "approved", "accept"].includes(normalizedDecision)) {
-      accepted = true;
-    } else if (
-      ["declined", "rejected", "cancelled", "canceled", "cancel"].includes(
-        normalizedDecision
-      )
-    ) {
-      accepted = false;
-    } else {
+    if (!patientId || !allowedDecisions.includes(decision)) {
       return res.status(400).json({
         success: false,
-        message: 'Decision must be "Accepted" or "Declined".',
-      });
-    }
-
-    if (!patientId) {
-      return res.status(400).json({
-        success: false,
-        message: "Patient ID is required.",
+        message:
+          'Patient ID and decision "Accepted", "Declined", or "Requested Another Time" are required.',
       });
     }
 
@@ -1699,6 +1690,7 @@ const respondToLabReschedule = async (req, res) => {
     if (
       order.rescheduleStatus !== "Pending" ||
       order.rescheduleProposedBy !== "Laboratory" ||
+      !order.requestedScheduledAt ||
       !canChangeLabBooking(order)
     ) {
       return res.status(409).json({
@@ -1708,10 +1700,33 @@ const respondToLabReschedule = async (req, res) => {
       });
     }
 
-    if (accepted) {
+    // PATIENT ASKS FOR ANOTHER TIME.
+    // Keep the original booking date/time unchanged.
+    if (decision === "Requested Another Time") {
+      order.requestedScheduledAt = null;
+      order.rescheduleRequestedAt = new Date();
+      order.rescheduleProposedBy = "Patient";
+      order.rescheduleStatus = "Pending";
+      order.rescheduleReason =
+        "Patient requested another available date/time.";
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Request sent to the laboratory for another date/time.",
+        order,
+      });
+    }
+
+    // PATIENT ACCEPTS THE LAB'S PROPOSED TIME.
+    if (decision === "Accepted") {
+      const proposedDate = new Date(order.requestedScheduledAt);
+
       if (
-        !order.requestedScheduledAt ||
-        new Date(order.requestedScheduledAt) <= new Date()
+        Number.isNaN(proposedDate.getTime()) ||
+        proposedDate <= new Date()
       ) {
         return res.status(400).json({
           success: false,
@@ -1721,32 +1736,28 @@ const respondToLabReschedule = async (req, res) => {
       }
 
       order.previousScheduledAt = order.scheduledAt || null;
-      order.scheduledAt = order.requestedScheduledAt;
-
-      // The lab proposed a slot and the patient accepted it.
-      if (order.status === "Pending") {
-        order.status = "Accepted";
-      }
-
+      order.scheduledAt = proposedDate;
       order.rescheduleStatus = "Approved";
-      order.rescheduleResponseReason = "";
-    } else {
-      order.rescheduleStatus = "Rejected";
-      order.rescheduleResponseReason = String(reason || "").trim();
     }
 
-    order.rescheduleRespondedBy = "Patient";
-    order.rescheduleRespondedAt = new Date();
+    // PATIENT DECLINES THE PROPOSAL.
+    // Do not cancel the entire lab booking.
+    if (decision === "Declined") {
+      order.rescheduleStatus = "Rejected";
+    }
 
-    clearRescheduleRequest(order);
+    order.requestedScheduledAt = null;
+    order.rescheduleRequestedAt = null;
+    order.rescheduleProposedBy = null;
 
     await order.save();
 
     return res.status(200).json({
       success: true,
-      message: accepted
-        ? "New lab booking date/time accepted and confirmed."
-        : "Lab's proposed date/time declined. The existing booking date/time remains unchanged.",
+      message:
+        decision === "Accepted"
+          ? "New lab booking date/time accepted."
+          : "Proposal declined. The original booking remains unchanged.",
       order,
     });
   } catch (error) {
@@ -1754,11 +1765,13 @@ const respondToLabReschedule = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Unable to process your response.",
+      message: "Unable to process the reschedule response.",
       error: error.message,
     });
   }
 };
+
+
 
 // ==========================================================
 // EXPORTS
