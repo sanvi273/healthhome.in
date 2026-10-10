@@ -1226,8 +1226,22 @@ const verifyCollectionOtp = async (req, res) => {
 // ==========================================================
 // RESCHEDULING HELPERS AND ENDPOINTS
 // ==========================================================
+// ==========================================================
+// CHECK WHETHER A LAB BOOKING CAN BE RESCHEDULED
+// ==========================================================
+
 const canChangeLabBooking = (order) => {
-  return ["Pending", "Accepted"].includes(order.status);
+  if (!order) return false;
+
+  // Only bookings that have not progressed beyond acceptance
+  // can be rescheduled.
+  const allowedStatuses = ["Pending", "Accepted"];
+
+  return (
+    allowedStatuses.includes(order.status) &&
+    order.status !== "Cancelled" &&
+    order.status !== "Rejected"
+  );
 };
 
 // ==========================================================
@@ -1274,12 +1288,20 @@ const cancelLabOrder = async (req, res) => {
       });
     }
 
-    if (!canChangeLabBooking(order)) {
-      return res.status(400).json({
-        success: false,
-        message: "This booking can no longer be cancelled.",
-      });
-    }
+if (!canChangeLabBooking(order)) {
+  return res.status(400).json({
+    success: false,
+    message:
+      `This booking cannot be rescheduled because its current status is "${order.status}". Only Pending or Accepted bookings can be rescheduled.`,
+  });
+}
+
+if (order.rescheduleStatus === "Pending") {
+  return res.status(400).json({
+    success: false,
+    message: "A reschedule request is already pending.",
+  });
+}
 
     order.status = "Cancelled";
     order.cancelledBy = cancelledBy;
