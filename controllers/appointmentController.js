@@ -778,359 +778,231 @@ exports.bookAppointment =
 
 
 
-exports.getAvailableSlots =
-
-  async (req, res) => {
-
-    try {
-
-
-
-      const doctorId =
-
-        req.params.doctorId
-
-          ?.toString()
-
-          .trim();
-
-
-
-      const appointmentDate =
-
-        req.params.date
-
-          ?.toString()
-
-          .trim();
-
-
-
-      console.log("=================================");
-
-      console.log(
-
-        "GET AVAILABLE APPOINTMENT SLOTS"
-
-      );
-
-
-
-      console.log(
-
-        "DOCTOR ID =",
-
-        doctorId
-
-      );
-
-
-
-      console.log(
-
-        "DATE =",
-
-        appointmentDate
-
-      );
-
-
-
-      console.log("=================================");
-
-
-
-      // ========================================================
-
-      // VALIDATION
-
-      // ========================================================
-
-
-
-      if (!doctorId) {
-
-        return res.status(400).json({
-
-          success: false,
-
-          message:
-
-            "Doctor ID is required",
-
-        });
-
-      }
-
-
-
-      if (!appointmentDate) {
-
-        return res.status(400).json({
-
-          success: false,
-
-          message:
-
-            "Appointment date is required",
-
-        });
-
-      }
-
-
-
-      // ========================================================
-
-      // DEFAULT DOCTOR SLOTS
-
-      // 30-minute slots
-
-      // ========================================================
-
-
-
-      const allSlots = [
-
-        "10:00 AM",
-
-        "10:30 AM",
-
-
-
-        "11:00 AM",
-
-        "11:30 AM",
-
-
-
-        "12:00 PM",
-
-        "12:30 PM",
-
-
-
-        "02:00 PM",
-
-        "02:30 PM",
-
-
-
-        "03:00 PM",
-
-        "03:30 PM",
-
-
-
-        "04:00 PM",
-
-        "04:30 PM",
-
-
-
-        "05:00 PM",
-
-        "05:30 PM",
-
-
-
-        "06:00 PM",
-
-        "06:30 PM",
-
-
-
-        "07:00 PM",
-
-        "07:30 PM",
-
-      ];
-
-
-
-      // ========================================================
-
-      // FIND BOOKED APPOINTMENTS
-
-      // ========================================================
-
-
-
-      const bookedAppointments =
-
-        await Appointment.find({
-
-          doctorId:
-
-            doctorId,
-
-
-
-          appointmentDate:
-
-            appointmentDate,
-
-
-
-          status: {
-
-            $in: [
-
-              "Pending",
-
-              "Upcoming",
-
-              "Accepted",
-
-            ],
-
-          },
-
-        }).select(
-
-          "appointmentTime"
-
-        );
-
-
-
-      // ========================================================
-
-      // EXTRACT BOOKED TIMES
-
-      // ========================================================
-
-
-
-      const bookedSlots =
-
-        bookedAppointments.map(
-
-          (appointment) =>
-
-            appointment.appointmentTime
-
-        );
-
-
-
-      console.log(
-
-        "BOOKED SLOTS =",
-
-        bookedSlots
-
-      );
-
-
-
-      // ========================================================
-
-      // CREATE SLOT RESPONSE
-
-      // ========================================================
-
-
-
-      const slots =
-
-        allSlots.map(
-
-          (time) => ({
-
-            time,
-
-
-
-            available:
-
-              !bookedSlots.includes(
-
-                time
-
-              ),
-
-          })
-
-        );
-
-
-
-      console.log(
-
-        "AVAILABLE SLOTS =",
-
-        slots
-
-      );
-
-
-
-      // ========================================================
-
-      // RESPONSE
-
-      // ========================================================
-
-
-
-      return res.status(200).json({
-
-        success: true,
-
-
-
-        doctorId,
-
-
-
-        date:
-
-          appointmentDate,
-
-
-
-        slots,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "GET AVAILABLE SLOTS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          "Failed to load available slots",
-
-
-
-        error:
-
-          error.message,
-
-      });
-
-    }
-
-  };
+// ============================================================
+// GET AVAILABLE APPOINTMENT SLOTS
+// GET /api/appointments/available-slots/:doctorId/:date
+// ============================================================
+
+exports.getAvailableSlots = async (req, res) => {
+  try {
+    const doctorId = req.params.doctorId?.toString().trim();
+    const appointmentDate = req.params.date?.toString().trim();
+
+    if (!doctorId || !appointmentDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Doctor ID and appointment date are required",
+      });
+    }
+
+    const Doctor = require("../models/doctor");
+
+    const doctor = await Doctor.findById(doctorId);
+
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: "Doctor not found",
+      });
+    }
+
+    const schedule = doctor.schedule || {};
+
+    // Support common schedule field formats.
+    const workingDays = schedule.workingDays || [];
+    const startTime = schedule.startTime || "10:00";
+    const endTime = schedule.endTime || "19:30";
+    const breakStart = schedule.breakStart || "13:00";
+    const breakEnd = schedule.breakEnd || "14:00";
+    const slotDuration = Number(schedule.slotDurationMinutes || 30);
+    const dailyLimit = Number(schedule.maxAppointmentsPerDay || 10);
+
+    if (slotDuration <= 0 || !Number.isFinite(slotDuration)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid slot duration in doctor's schedule",
+      });
+    }
+
+    // Parse HH:mm into minutes after midnight.
+    const toMinutes = (time) => {
+      if (!time || !/^\d{1,2}:\d{2}$/.test(time)) {
+        return null;
+      }
+
+      const [hours, minutes] = time.split(":").map(Number);
+
+      if (
+        hours < 0 ||
+        hours > 23 ||
+        minutes < 0 ||
+        minutes > 59
+      ) {
+        return null;
+      }
+
+      return hours * 60 + minutes;
+    };
+
+    const start = toMinutes(startTime);
+    const end = toMinutes(endTime);
+    const breakFrom = toMinutes(breakStart);
+    const breakTo = toMinutes(breakEnd);
+
+    if (
+      start === null ||
+      end === null ||
+      start >= end ||
+      breakFrom === null ||
+      breakTo === null
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid doctor's working schedule",
+      });
+    }
+
+    // Parse date as a calendar date, avoiding loose date matching.
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+      appointmentDate
+    );
+
+    if (!dateMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Date must use YYYY-MM-DD format",
+      });
+    }
+
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    const requestedDate = new Date(Date.UTC(year, month - 1, day));
+
+    if (
+      requestedDate.getUTCFullYear() !== year ||
+      requestedDate.getUTCMonth() !== month - 1 ||
+      requestedDate.getUTCDate() !== day
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid appointment date",
+      });
+    }
+
+    // Monday = 1 ... Sunday = 7.
+    const weekday = requestedDate.getUTCDay();
+    const dayNumber = weekday === 0 ? 7 : weekday;
+
+    const dayNames = [
+      "",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday",
+    ];
+
+    const requestedDay = dayNames[dayNumber];
+
+    const normalizeDay = (value) =>
+      String(value).trim().toLowerCase();
+
+    const isWorkingDay =
+      workingDays.length === 0 ||
+      workingDays.some(
+        (day) => normalizeDay(day) === normalizeDay(requestedDay)
+      );
+
+    if (!isWorkingDay || doctor.isAvailable === false) {
+      return res.status(200).json({
+        success: true,
+        doctorId,
+        date: appointmentDate,
+        slots: [],
+        message: "Doctor is unavailable on this date",
+      });
+    }
+
+    // Find appointments that occupy slots.
+    const bookedAppointments = await Appointment.find({
+      doctorId,
+      appointmentDate,
+      status: {
+        $in: ["Pending", "Upcoming", "Accepted"],
+      },
+    }).select("appointmentTime");
+
+    if (bookedAppointments.length >= dailyLimit) {
+      return res.status(200).json({
+        success: true,
+        doctorId,
+        date: appointmentDate,
+        slots: [],
+        message: "Doctor's daily appointment limit has been reached",
+      });
+    }
+
+    const bookedSlots = new Set(
+      bookedAppointments.map((appointment) =>
+        String(appointment.appointmentTime || "").trim()
+      )
+    );
+
+    const formatTime = (minutes) => {
+      const hours24 = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      const period = hours24 >= 12 ? "PM" : "AM";
+      const hours12 = hours24 % 12 || 12;
+
+      return `${String(hours12).padStart(2, "0")}:${String(
+        mins
+      ).padStart(2, "0")} ${period}`;
+    };
+
+    const slots = [];
+
+    for (
+      let time = start;
+      time + slotDuration <= end;
+      time += slotDuration
+    ) {
+      const slotEnd = time + slotDuration;
+
+      // Exclude slots that overlap the doctor's break.
+      const overlapsBreak =
+        time < breakTo && slotEnd > breakFrom;
+
+      if (overlapsBreak) {
+        continue;
+      }
+
+      const formattedTime = formatTime(time);
+
+      slots.push({
+        time: formattedTime,
+        available: !bookedSlots.has(formattedTime),
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      doctorId,
+      date: appointmentDate,
+      slots,
+    });
+  } catch (error) {
+    console.error("GET AVAILABLE SLOTS ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load available slots",
+      error: error.message,
+    });
+  }
+};
 
 
 
