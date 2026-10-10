@@ -1,21 +1,113 @@
 const Appointment = require("../models/Appointment");
 
-
-
 const {
 
-  RtcTokenBuilder,
+  RtcTokenBuilder,
 
-  RtcRole,
+  RtcRole,
 
 } = require("agora-token");
 
-
-
 const uploadToCloudinary =
 
-  require("../utils/cloudinaryUpload");
+  require("../utils/cloudinaryUpload");
 
+// Shared helpers for consistent appointment slot validation.
+const Doctor = require("../models/doctor");
+
+const parseAppointmentTime = (value) => {
+  if (typeof value !== "string") return null;
+  const input = value.trim();
+  let match = /^(\d{1,2}):(\d{2})$/.exec(input);
+  if (match) {
+    const h = Number(match[1]), m = Number(match[2]);
+    return h <= 23 && m <= 59 ? h * 60 + m : null;
+  }
+  match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(input);
+  if (!match) return null;
+  let h = Number(match[1]), m = Number(match[2]);
+  if (h < 1 || h > 12 || m > 59) return null;
+  h = h % 12 + (/PM/i.test(match[3]) ? 12 : 0);
+  return h * 60 + m;
+};
+
+const formatAppointmentTime = (minutes) => {
+  const h24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const period = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 || 12;
+  return `${String(h12).padStart(2, "0")}:${String(mins).padStart(2, "0")} ${period}`;
+};
+
+const parseCalendarDate = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day ? date : null;
+};
+
+const getDoctorSlotConfig = (doctor) => {
+  const start = parseAppointmentTime(doctor.startTime);
+  const end = parseAppointmentTime(doctor.endTime);
+  const breakStart = parseAppointmentTime(doctor.breakStart);
+  const breakEnd = parseAppointmentTime(doctor.breakEnd);
+  const duration = Number(doctor.slotDurationMinutes);
+  const workingDays = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
+  if (start === null || end === null || start >= end ||
+      breakStart === null || breakEnd === null ||
+      breakStart > breakEnd || !Number.isFinite(duration) ||
+      duration <= 0 || workingDays.length === 0) return null;
+  return { start, end, breakStart, breakEnd, duration, workingDays };
+};
+
+const validateDoctorSlot = async ({ doctor, date, time, excludeAppointmentId }) => {
+  if (!doctor || doctor.isAvailable === false) return "Doctor is not accepting appointments.";
+  const parsedDate = parseCalendarDate(date);
+  if (!parsedDate) return "Date must be valid and use YYYY-MM-DD format.";
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (parsedDate < todayUtc) return "Past appointment dates are not allowed.";
+
+  const config = getDoctorSlotConfig(doctor);
+  if (!config) return "Doctor's schedule is incomplete or invalid.";
+  const dayIndex = parsedDate.getUTCDay();
+  const dayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][dayIndex];
+  if (!config.workingDays.some((day) => String(day).trim().toLowerCase() === dayName.toLowerCase())) {
+    return "Doctor is not available on the selected day.";
+  }
+
+  const requestedMinutes = parseAppointmentTime(time);
+  if (requestedMinutes === null) return "Invalid appointment time.";
+  const slotStart = config.start + Math.floor((requestedMinutes - config.start) / config.duration) * config.duration;
+  if (requestedMinutes < config.start || requestedMinutes >= config.end ||
+      (requestedMinutes - config.start) % config.duration !== 0 ||
+      requestedMinutes + config.duration > config.end) {
+    return "Selected time is not a valid appointment slot.";
+  }
+  if (requestedMinutes < config.breakEnd && requestedMinutes + config.duration > config.breakStart) {
+    return "Selected time overlaps the doctor's break.";
+  }
+
+  const dayAppointments = await Appointment.find({
+    doctorId: String(doctor._id),
+    appointmentDate: date,
+    status: { $in: ["Pending", "Upcoming", "Accepted"] },
+    ...(excludeAppointmentId ? { _id: { $ne: excludeAppointmentId } } : {}),
+  }).select("appointmentTime");
+
+  if (dayAppointments.length >= Number(doctor.maxAppointmentsPerDay || 10)) {
+    return "Doctor's daily appointment limit has been reached.";
+  }
+
+  const occupied = dayAppointments.some((item) =>
+    parseAppointmentTime(item.appointmentTime) === requestedMinutes
+  );
+  if (occupied) return "This appointment slot is already booked.";
+  return null;
+};
 
 
 // ============================================================
@@ -24,727 +116,564 @@ const uploadToCloudinary =
 
 // ============================================================
 
-
-
 exports.bookAppointment =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
-      console.log("=================================");
+      console.log("=================================");
 
-      console.log("BOOK APPOINTMENT");
+      console.log("BOOK APPOINTMENT");
 
-      console.log("BODY =", req.body);
+      console.log("BODY =", req.body);
 
-      console.log("FILES =", req.files);
+      console.log("FILES =", req.files);
 
-      console.log("=================================");
+      console.log("=================================");
 
+      const {
 
+        patientName,
 
-      const {
+        patientPhone,
 
-        patientName,
+        doctorId,
 
-        patientPhone,
+        doctorName,
 
+        specialization,
 
+        hospital,
 
-        doctorId,
+        fees,
 
-        doctorName,
+        consultationType,
 
-        specialization,
+        appointmentDate,
 
-        hospital,
+        appointmentTime,
 
-        fees,
+        paymentStatus,
 
+        razorpayOrderId,
 
+        paymentId,
 
-        consultationType,
+      } = req.body;
 
+      // ========================================================
 
+      // DEBUG CONSULTATION TYPE
 
-        appointmentDate,
+      // ========================================================
 
-        appointmentTime,
+      console.log("=================================");
 
+      console.log(
 
+        "RECEIVED CONSULTATION TYPE =",
 
-        paymentStatus,
+        consultationType
 
-        razorpayOrderId,
+      );
 
-        paymentId,
+      console.log(
 
-      } = req.body;
+        "RECEIVED CONSULTATION TYPE JSON =",
 
+        JSON.stringify(consultationType)
 
+      );
 
-      // ========================================================
+      console.log(
 
-      // DEBUG CONSULTATION TYPE
+        "RECEIVED CONSULTATION TYPE TYPE =",
 
-      // ========================================================
+        typeof consultationType
 
+      );
 
+      console.log("=================================");
 
-      console.log("=================================");
+      // ========================================================
 
-      console.log(
+      // REQUIRED FIELDS
 
-        "RECEIVED CONSULTATION TYPE =",
+      // ========================================================
 
-        consultationType
+      if (
 
-      );
+        !patientName ||
 
+        !patientPhone ||
 
+        !doctorId ||
 
-      console.log(
+        !doctorName ||
 
-        "RECEIVED CONSULTATION TYPE JSON =",
+        !appointmentDate ||
 
-        JSON.stringify(consultationType)
+        !appointmentTime
 
-      );
+      ) {
 
+        return res.status(400).json({
 
+          success: false,
 
-      console.log(
+          message:
 
-        "RECEIVED CONSULTATION TYPE TYPE =",
+            "Patient, doctor ID, doctor name, date and time are required",
 
-        typeof consultationType
+        });
 
-      );
+      }
 
+      // ========================================================
 
+      // VALIDATE CONSULTATION TYPE
 
-      console.log("=================================");
+      // ========================================================
 
+      const finalConsultationType =
 
+        consultationType ===
 
-      // ========================================================
+        "Video Consultation"
 
-      // REQUIRED FIELDS
+          ? "Video Consultation"
 
-      // ========================================================
+          : "Hospital Visit";
 
+      // ========================================================
 
+      // DEBUG FINAL CONSULTATION TYPE
 
-      if (
+      // ========================================================
 
-        !patientName ||
+      console.log("=================================");
 
-        !patientPhone ||
+      console.log(
 
-        !doctorId ||
+        "FINAL CONSULTATION TYPE =",
 
-        !doctorName ||
+        finalConsultationType
 
-        !appointmentDate ||
+      );
 
-        !appointmentTime
+      console.log(
 
-      ) {
+        "FINAL CONSULTATION TYPE JSON =",
 
-        return res.status(400).json({
+        JSON.stringify(finalConsultationType)
 
-          success: false,
+      );
 
-          message:
+      console.log("=================================");
 
-            "Patient, doctor ID, doctor name, date and time are required",
+      // ========================================================
 
-        });
+      // CHECK DUPLICATE SLOT
 
-      }
+      // ========================================================
 
+      const doctorForBooking = await Doctor.findById(doctorId.toString());
+      if (!doctorForBooking) {
+        return res.status(404).json({ success: false, message: "Doctor not found" });
+      }
 
+      const normalizedAppointmentTimeMinutes = parseAppointmentTime(appointmentTime);
+      if (normalizedAppointmentTimeMinutes === null) {
+        return res.status(400).json({ success: false, message: "Invalid appointment time" });
+      }
+      const normalizedAppointmentTime = formatAppointmentTime(normalizedAppointmentTimeMinutes);
+      const slotError = await validateDoctorSlot({
+        doctor: doctorForBooking,
+        date: appointmentDate,
+        time: normalizedAppointmentTime,
+      });
+      if (slotError) {
+        return res.status(400).json({ success: false, message: slotError });
+      }
 
-      // ========================================================
+      const existingAppointment =
 
-      // VALIDATE CONSULTATION TYPE
+        await Appointment.findOne({
 
-      // ========================================================
+          doctorId:
 
+            doctorId.toString(),
 
+          appointmentDate,
 
-      const finalConsultationType =
+          appointmentTime: normalizedAppointmentTime,
 
-        consultationType ===
+          status: {
 
-        "Video Consultation"
+            $in: [
 
-          ? "Video Consultation"
+              "Pending",
 
-          : "Hospital Visit";
+              "Upcoming",
 
+              "Accepted",
 
+            ],
 
-      // ========================================================
+          },
 
-      // DEBUG FINAL CONSULTATION TYPE
+        });
 
-      // ========================================================
+      if (existingAppointment) {
 
+        return res.status(409).json({
 
+          success: false,
 
-      console.log("=================================");
+          message:
 
-      console.log(
+            "This doctor has already been booked for this time slot",
 
-        "FINAL CONSULTATION TYPE =",
+        });
 
-        finalConsultationType
+      }
 
-      );
+      // ========================================================
 
+      // UPLOAD PATIENT REPORTS
 
+      // ========================================================
 
-      console.log(
+      const uploadedReports = [];
 
-        "FINAL CONSULTATION TYPE JSON =",
+      if (
 
-        JSON.stringify(finalConsultationType)
+        req.files &&
 
-      );
+        req.files.length > 0
 
+      ) {
 
+        for (
 
-      console.log("=================================");
+          const file of req.files
 
+        ) {
 
+          const result =
 
-      // ========================================================
+            await uploadToCloudinary(
 
-      // CHECK DUPLICATE SLOT
+              file,
 
-      // ========================================================
+              "appointment_reports"
 
+            );
 
+          uploadedReports.push({
 
-      const existingAppointment =
+            fileName:
 
-        await Appointment.findOne({
+              file.originalname || "",
 
-          doctorId:
+            fileUrl:
 
-            doctorId.toString(),
+              result.secure_url || "",
 
+            fileType:
 
+              file.mimetype || "",
 
-          appointmentDate,
+          });
 
+        }
 
+      }
 
-          appointmentTime,
+      // ========================================================
 
+      // CREATE APPOINTMENT
 
+      // ========================================================
 
-          status: {
+      console.log("=================================");
 
-            $in: [
+      console.log("FINAL APPOINTMENT DATA");
 
-              "Pending",
+      console.log(
 
-              "Upcoming",
+        "doctorId =",
 
-              "Accepted",
+        doctorId
 
-            ],
+      );
 
-          },
+      console.log(
 
-        });
+        "doctorId type =",
 
+        typeof doctorId
 
+      );
 
-      if (existingAppointment) {
+      console.log(
 
-        return res.status(409).json({
+        "doctorName =",
 
-          success: false,
+        doctorName
 
-          message:
+      );
 
-            "This doctor has already been booked for this time slot",
+      console.log(
 
-        });
+        "appointmentDate =",
 
-      }
+        appointmentDate
 
+      );
 
+      console.log(
 
-      // ========================================================
+        "appointmentTime =",
 
-      // UPLOAD PATIENT REPORTS
+        appointmentTime
 
-      // ========================================================
+      );
 
+      console.log(
 
+        "consultationType =",
 
-      const uploadedReports = [];
+        finalConsultationType
 
+      );
 
+      console.log("=================================");
 
-      if (
+      // ========================================================
 
-        req.files &&
+      // SAVE APPOINTMENT
 
-        req.files.length > 0
+      // ========================================================
 
-      ) {
+      const appointment =
 
-        for (
+        await Appointment.create({
 
-          const file of req.files
+          // ---------------- Patient ----------------
 
-        ) {
+          patientName,
 
-          const result =
+          patientPhone,
 
-            await uploadToCloudinary(
+          // ---------------- Doctor ----------------
 
-              file,
+          doctorId:
 
-              "appointment_reports"
+            doctorId.toString(),
 
-            );
+          doctorName,
 
+          specialization:
 
+            specialization || "",
 
-          uploadedReports.push({
+          hospital:
 
-            fileName:
+            hospital || "",
 
-              file.originalname || "",
+          fees:
 
+            Number(fees || 0),
 
+          // ---------------- Appointment ----------------
 
-            fileUrl:
+          consultationType:
 
-              result.secure_url || "",
+            finalConsultationType,
 
+          appointmentDate,
 
+          appointmentTime: normalizedAppointmentTime,
 
-            fileType:
+          // ---------------- Reports ----------------
 
-              file.mimetype || "",
+          reports:
 
-          });
+            uploadedReports,
 
-        }
+          // ---------------- Payment ----------------
 
-      }
+          paymentStatus:
 
+            paymentStatus || "Pending",
 
+          razorpayOrderId:
 
-      // ========================================================
+            razorpayOrderId || "",
 
-      // CREATE APPOINTMENT
+          paymentId:
 
-      // ========================================================
+            paymentId || "",
 
+          // ---------------- Appointment Status ----------------
 
+          status: "Pending",
 
-      console.log("=================================");
+          // ---------------- Video Consultation ----------------
 
-      console.log("FINAL APPOINTMENT DATA");
+          meetingId: "",
 
+          consultationStatus:
 
+            "Pending",
 
-      console.log(
+          prescriptionSent:
 
-        "doctorId =",
+            false,
 
-        doctorId
+        });
 
-      );
+      // ========================================================
 
+      // VERIFY SAVED CONSULTATION TYPE
 
+      // ========================================================
 
-      console.log(
+      console.log("=================================");
 
-        "doctorId type =",
+      console.log("SAVED APPOINTMENT");
 
-        typeof doctorId
+      console.log(
 
-      );
+        "saved _id =",
 
+        appointment._id
 
+      );
 
-      console.log(
+      console.log(
 
-        "doctorName =",
+        "saved doctorId =",
 
-        doctorName
+        appointment.doctorId
 
-      );
+      );
 
+      console.log(
 
+        "saved doctorName =",
 
-      console.log(
+        appointment.doctorName
 
-        "appointmentDate =",
+      );
 
-        appointmentDate
+      console.log(
 
-      );
+        "saved consultationType =",
 
+        appointment.consultationType
 
+      );
 
-      console.log(
+      console.log(
 
-        "appointmentTime =",
+        "saved consultationType JSON =",
 
-        appointmentTime
+        JSON.stringify(
 
-      );
+          appointment.consultationType
 
+        )
 
+      );
 
-      console.log(
+      console.log(
 
-        "consultationType =",
+        "saved consultationStatus =",
 
-        finalConsultationType
+        appointment.consultationStatus
 
-      );
+      );
 
+      console.log(
 
+        "saved status =",
 
-      console.log("=================================");
+        appointment.status
 
+      );
 
+      console.log("=================================");
 
-      // ========================================================
+      // ========================================================
 
-      // SAVE APPOINTMENT
+      // RESPONSE
 
-      // ========================================================
+      // ========================================================
 
+      return res.status(201).json({
 
+        success: true,
 
-      const appointment =
+        message:
 
-        await Appointment.create({
+          "Appointment booked successfully",
 
+        appointment,
 
+      });
 
-          // ---------------- Patient ----------------
+    } catch (error) {
 
+      console.log(
 
+        "BOOK APPOINTMENT ERROR:",
 
-          patientName,
+        error
 
+      );
 
+      // ========================================================
 
-          patientPhone,
+      // DUPLICATE MONGODB INDEX
 
+      // ========================================================
 
+      if (error.code === 11000) {
 
-          // ---------------- Doctor ----------------
+        return res.status(409).json({
 
+          success: false,
 
+          message:
 
-          doctorId:
+            "This doctor appointment slot is already booked",
 
-            doctorId.toString(),
+        });
 
+      }
 
+      // ========================================================
 
-          doctorName,
+      // SERVER ERROR
 
+      // ========================================================
 
+      return res.status(500).json({
 
-          specialization:
+        success: false,
 
-            specialization || "",
+        message:
 
+          error.message,
 
+      });
 
-          hospital:
+    }
 
-            hospital || "",
-
-
-
-          fees:
-
-            Number(fees || 0),
-
-
-
-          // ---------------- Appointment ----------------
-
-
-
-          consultationType:
-
-            finalConsultationType,
-
-
-
-          appointmentDate,
-
-
-
-          appointmentTime,
-
-
-
-          // ---------------- Reports ----------------
-
-
-
-          reports:
-
-            uploadedReports,
-
-
-
-          // ---------------- Payment ----------------
-
-
-
-          paymentStatus:
-
-            paymentStatus || "Pending",
-
-
-
-          razorpayOrderId:
-
-            razorpayOrderId || "",
-
-
-
-          paymentId:
-
-            paymentId || "",
-
-
-
-          // ---------------- Appointment Status ----------------
-
-
-
-          status: "Pending",
-
-
-
-          // ---------------- Video Consultation ----------------
-
-
-
-          meetingId: "",
-
-
-
-          consultationStatus:
-
-            "Pending",
-
-
-
-          prescriptionSent:
-
-            false,
-
-        });
-
-
-
-      // ========================================================
-
-      // VERIFY SAVED CONSULTATION TYPE
-
-      // ========================================================
-
-
-
-      console.log("=================================");
-
-      console.log("SAVED APPOINTMENT");
-
-
-
-      console.log(
-
-        "saved _id =",
-
-        appointment._id
-
-      );
-
-
-
-      console.log(
-
-        "saved doctorId =",
-
-        appointment.doctorId
-
-      );
-
-
-
-      console.log(
-
-        "saved doctorName =",
-
-        appointment.doctorName
-
-      );
-
-
-
-      console.log(
-
-        "saved consultationType =",
-
-        appointment.consultationType
-
-      );
-
-
-
-      console.log(
-
-        "saved consultationType JSON =",
-
-        JSON.stringify(
-
-          appointment.consultationType
-
-        )
-
-      );
-
-
-
-      console.log(
-
-        "saved consultationStatus =",
-
-        appointment.consultationStatus
-
-      );
-
-
-
-      console.log(
-
-        "saved status =",
-
-        appointment.status
-
-      );
-
-
-
-      console.log("=================================");
-
-
-
-      // ========================================================
-
-      // RESPONSE
-
-      // ========================================================
-
-
-
-      return res.status(201).json({
-
-        success: true,
-
-
-
-        message:
-
-          "Appointment booked successfully",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "BOOK APPOINTMENT ERROR:",
-
-        error
-
-      );
-
-
-
-      // ========================================================
-
-      // DUPLICATE MONGODB INDEX
-
-      // ========================================================
-
-
-
-      if (error.code === 11000) {
-
-        return res.status(409).json({
-
-          success: false,
-
-
-
-          message:
-
-            "This doctor appointment slot is already booked",
-
-        });
-
-      }
-
-
-
-      // ========================================================
-
-      // SERVER ERROR
-
-      // ========================================================
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -776,23 +705,32 @@ exports.bookAppointment =
 
 // ============================================================
 
-
-
 // ============================================================
+
 // GET AVAILABLE APPOINTMENT SLOTS
+
 // GET /api/appointments/available-slots/:doctorId/:date
+
 // ============================================================
 
 exports.getAvailableSlots = async (req, res) => {
+
   try {
+
     const doctorId = req.params.doctorId?.toString().trim();
+
     const appointmentDate = req.params.date?.toString().trim();
 
     if (!doctorId || !appointmentDate) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Doctor ID and appointment date are required",
+
       });
+
     }
 
     const Doctor = require("../models/doctor");
@@ -800,213 +738,332 @@ exports.getAvailableSlots = async (req, res) => {
     const doctor = await Doctor.findById(doctorId);
 
     if (!doctor) {
+
       return res.status(404).json({
+
         success: false,
+
         message: "Doctor not found",
+
       });
+
     }
 
-    const schedule = doctor.schedule || {};
-
-    // Support common schedule field formats.
-    const workingDays = schedule.workingDays || [];
-    const startTime = schedule.startTime || "10:00";
-    const endTime = schedule.endTime || "19:30";
-    const breakStart = schedule.breakStart || "13:00";
-    const breakEnd = schedule.breakEnd || "14:00";
-    const slotDuration = Number(schedule.slotDurationMinutes || 30);
-    const dailyLimit = Number(schedule.maxAppointmentsPerDay || 10);
+    // Doctor model stores these fields directly (not under doctor.schedule).
+    const workingDays = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
+    const startTime = doctor.startTime;
+    const endTime = doctor.endTime;
+    const breakStart = doctor.breakStart;
+    const breakEnd = doctor.breakEnd;
+    const slotDuration = Number(doctor.slotDurationMinutes);
+    const dailyLimit = Number(doctor.maxAppointmentsPerDay);
 
     if (slotDuration <= 0 || !Number.isFinite(slotDuration)) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Invalid slot duration in doctor's schedule",
+
       });
+
     }
 
     // Parse HH:mm into minutes after midnight.
+
     const toMinutes = (time) => {
+
       if (!time || !/^\d{1,2}:\d{2}$/.test(time)) {
+
         return null;
+
       }
 
       const [hours, minutes] = time.split(":").map(Number);
 
       if (
+
         hours < 0 ||
+
         hours > 23 ||
+
         minutes < 0 ||
+
         minutes > 59
+
       ) {
+
         return null;
+
       }
 
       return hours * 60 + minutes;
+
     };
 
     const start = toMinutes(startTime);
+
     const end = toMinutes(endTime);
+
     const breakFrom = toMinutes(breakStart);
+
     const breakTo = toMinutes(breakEnd);
 
     if (
+
       start === null ||
+
       end === null ||
+
       start >= end ||
+
       breakFrom === null ||
+
       breakTo === null
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Invalid doctor's working schedule",
+
       });
+
     }
 
     // Parse date as a calendar date, avoiding loose date matching.
+
     const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+
       appointmentDate
+
     );
 
     if (!dateMatch) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Date must use YYYY-MM-DD format",
+
       });
+
     }
 
     const year = Number(dateMatch[1]);
+
     const month = Number(dateMatch[2]);
+
     const day = Number(dateMatch[3]);
+
     const requestedDate = new Date(Date.UTC(year, month - 1, day));
 
     if (
+
       requestedDate.getUTCFullYear() !== year ||
+
       requestedDate.getUTCMonth() !== month - 1 ||
+
       requestedDate.getUTCDate() !== day
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Invalid appointment date",
+
       });
+
     }
 
     // Monday = 1 ... Sunday = 7.
+
     const weekday = requestedDate.getUTCDay();
+
     const dayNumber = weekday === 0 ? 7 : weekday;
 
     const dayNames = [
+
       "",
+
       "Monday",
+
       "Tuesday",
+
       "Wednesday",
+
       "Thursday",
+
       "Friday",
+
       "Saturday",
+
       "Sunday",
+
     ];
 
     const requestedDay = dayNames[dayNumber];
 
     const normalizeDay = (value) =>
+
       String(value).trim().toLowerCase();
 
     const isWorkingDay =
+
       workingDays.length === 0 ||
+
       workingDays.some(
+
         (day) => normalizeDay(day) === normalizeDay(requestedDay)
+
       );
 
     if (!isWorkingDay || doctor.isAvailable === false) {
+
       return res.status(200).json({
+
         success: true,
+
         doctorId,
+
         date: appointmentDate,
+
         slots: [],
+
         message: "Doctor is unavailable on this date",
+
       });
+
     }
 
     // Find appointments that occupy slots.
+
     const bookedAppointments = await Appointment.find({
+
       doctorId,
+
       appointmentDate,
+
       status: {
+
         $in: ["Pending", "Upcoming", "Accepted"],
+
       },
+
     }).select("appointmentTime");
 
     if (bookedAppointments.length >= dailyLimit) {
+
       return res.status(200).json({
+
         success: true,
+
         doctorId,
+
         date: appointmentDate,
+
         slots: [],
+
         message: "Doctor's daily appointment limit has been reached",
+
       });
+
     }
 
     const bookedSlots = new Set(
-      bookedAppointments.map((appointment) =>
-        String(appointment.appointmentTime || "").trim()
-      )
+      bookedAppointments
+        .map((appointment) => parseAppointmentTime(appointment.appointmentTime))
+        .filter((minutes) => minutes !== null)
     );
 
     const formatTime = (minutes) => {
+
       const hours24 = Math.floor(minutes / 60);
+
       const mins = minutes % 60;
+
       const period = hours24 >= 12 ? "PM" : "AM";
+
       const hours12 = hours24 % 12 || 12;
 
       return `${String(hours12).padStart(2, "0")}:${String(
+
         mins
+
       ).padStart(2, "0")} ${period}`;
+
     };
 
     const slots = [];
 
     for (
+
       let time = start;
+
       time + slotDuration <= end;
+
       time += slotDuration
+
     ) {
+
       const slotEnd = time + slotDuration;
 
       // Exclude slots that overlap the doctor's break.
+
       const overlapsBreak =
+
         time < breakTo && slotEnd > breakFrom;
 
       if (overlapsBreak) {
+
         continue;
+
       }
 
       const formattedTime = formatTime(time);
 
       slots.push({
         time: formattedTime,
-        available: !bookedSlots.has(formattedTime),
+        available: !bookedSlots.has(time),
       });
+
     }
 
     return res.status(200).json({
+
       success: true,
+
       doctorId,
+
       date: appointmentDate,
+
       slots,
+
     });
+
   } catch (error) {
+
     console.error("GET AVAILABLE SLOTS ERROR:", error);
 
     return res.status(500).json({
+
       success: false,
+
       message: "Failed to load available slots",
+
       error: error.message,
+
     });
+
   }
+
 };
-
-
-
-
 
 // ============================================================
 
@@ -1014,73 +1071,53 @@ exports.getAvailableSlots = async (req, res) => {
 
 // ============================================================
 
-
-
 exports.getAppointments =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointments =
 
+        await Appointment.find()
 
-      const appointments =
+          .sort({
 
-        await Appointment.find()
+            createdAt: -1,
 
-          .sort({
+          });
 
-            createdAt: -1,
+      return res.json({
 
-          });
+        success: true,
 
+        appointments,
 
+      });
 
-      return res.json({
+    } catch (error) {
 
-        success: true,
+      console.log(
 
+        "GET ALL APPOINTMENTS ERROR:",
 
+        error
 
-        appointments,
+      );
 
-      });
+      return res.status(500).json({
 
+        success: false,
 
+        message:
 
-    } catch (error) {
+          error.message,
 
+      });
 
+    }
 
-      console.log(
-
-        "GET ALL APPOINTMENTS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -1088,405 +1125,315 @@ exports.getAppointments =
 
 // ============================================================
 
-
-
 exports.getDoctorAppointments =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const doctorId =
 
+        req.params.doctorId
 
-      const doctorId =
+          ?.toString()
 
-        req.params.doctorId
+          .trim();
 
-          ?.toString()
+      console.log("=================================");
 
-          .trim();
+      console.log(
 
+        "GET DOCTOR APPOINTMENTS"
 
+      );
 
-      console.log("=================================");
+      console.log(
 
-      console.log(
+        "DOCTOR ID =",
 
-        "GET DOCTOR APPOINTMENTS"
+        doctorId
 
-      );
+      );
 
+      console.log("=================================");
 
+      if (!doctorId) {
 
-      console.log(
+        return res.status(400).json({
 
-        "DOCTOR ID =",
+          success: false,
 
-        doctorId
+          message:
 
-      );
+            "Doctor ID is required",
 
+        });
 
+      }
 
-      console.log("=================================");
+      // --------------------------------------------------------
 
+      // FIND DOCTOR
 
+      // --------------------------------------------------------
 
-      if (!doctorId) {
+      const Doctor =
 
-        return res.status(400).json({
+        require("../models/doctor");
 
-          success: false,
+      const doctor =
 
+        await Doctor.findById(
 
+          doctorId
 
-          message:
+        );
 
-            "Doctor ID is required",
+      if (!doctor) {
 
-        });
+        return res.status(404).json({
 
-      }
+          success: false,
 
+          message:
 
+            "Doctor not found",
 
-      // --------------------------------------------------------
+        });
 
-      // FIND DOCTOR
+      }
 
-      // --------------------------------------------------------
+      const doctorName =
 
+        doctor.name
 
+          ?.toString()
 
-      const Doctor =
+          .trim();
 
-        require("../models/doctor");
+      console.log(
 
+        "DOCTOR NAME =",
 
+        doctorName
 
-      const doctor =
+      );
 
-        await Doctor.findById(
+      // --------------------------------------------------------
 
-          doctorId
+      // FIND APPOINTMENTS
 
-        );
+      //
 
+      // 1. New appointments using doctorId
 
+      //
 
-      if (!doctor) {
+      // OR
 
-        return res.status(404).json({
+      //
 
-          success: false,
+      // 2. Old appointments without doctorId
 
+      //    but matching doctorName
 
+      // --------------------------------------------------------
 
-          message:
+      const appointments =
 
-            "Doctor not found",
+        await Appointment.find({
 
-        });
+          $or: [
 
-      }
+            {
 
+              doctorId:
 
+                doctorId,
 
-      const doctorName =
+            },
 
-        doctor.name
+            {
 
-          ?.toString()
+              $and: [
 
-          .trim();
+                {
 
+                  $or: [
 
+                    {
 
-      console.log(
+                      doctorId: {
 
-        "DOCTOR NAME =",
+                        $exists:
 
-        doctorName
+                          false,
 
-      );
+                      },
 
+                    },
 
+                    {
 
-      // --------------------------------------------------------
+                      doctorId:
 
-      // FIND APPOINTMENTS
+                        "",
 
-      //
+                    },
 
-      // 1. New appointments using doctorId
+                    {
 
-      //
+                      doctorId:
 
-      // OR
+                        null,
 
-      //
+                    },
 
-      // 2. Old appointments without doctorId
+                  ],
 
-      //    but matching doctorName
+                },
 
-      // --------------------------------------------------------
+                {
 
+                  doctorName:
 
+                    doctorName,
 
-      const appointments =
+                },
 
-        await Appointment.find({
+              ],
 
-          $or: [
+            },
 
+          ],
 
+        }).sort({
 
-            {
+          createdAt: -1,
 
-              doctorId:
+        });
 
-                doctorId,
+      console.log(
 
-            },
+        "DOCTOR APPOINTMENTS COUNT =",
 
+        appointments.length
 
+      );
 
-            {
+      appointments.forEach(
 
-              $and: [
+        (
 
+          appointment,
 
+          index
 
-                {
+        ) => {
 
-                  $or: [
+          console.log(
 
+            `APPOINTMENT ${
 
+              index + 1
 
-                    {
+            }:`
 
-                      doctorId: {
+          );
 
-                        $exists:
+          console.log(
 
-                          false,
+            "ID =",
 
-                      },
+            appointment._id.toString()
 
-                    },
+          );
 
+          console.log(
 
+            "PATIENT =",
 
-                    {
+            appointment.patientName
 
-                      doctorId:
+          );
 
-                        "",
+          console.log(
 
-                    },
+            "DOCTOR ID =",
 
+            appointment.doctorId
 
+          );
 
-                    {
+          console.log(
 
-                      doctorId:
+            "DOCTOR NAME =",
 
-                        null,
+            appointment.doctorName
 
-                    },
+          );
 
+          console.log(
 
+            "CONSULTATION TYPE =",
 
-                  ],
+            appointment.consultationType
 
-                },
+          );
 
+          console.log(
 
+            "CONSULTATION STATUS =",
 
-                {
+            appointment.consultationStatus
 
-                  doctorName:
+          );
 
-                    doctorName,
+          console.log(
 
-                },
+            "STATUS =",
 
+            appointment.status
 
+          );
 
-              ],
+        }
 
-            },
+      );
 
+      console.log("=================================");
 
+      return res.json({
 
-          ],
+        success: true,
 
-        }).sort({
+        appointments,
 
-          createdAt: -1,
+      });
 
-        });
+    } catch (error) {
 
+      console.log(
 
+        "GET DOCTOR APPOINTMENTS ERROR:",
 
-      console.log(
+        error
 
-        "DOCTOR APPOINTMENTS COUNT =",
+      );
 
-        appointments.length
+      return res.status(500).json({
 
-      );
+        success: false,
 
+        message:
 
+          error.message,
 
-      appointments.forEach(
+      });
 
-        (
+    }
 
-          appointment,
-
-          index
-
-        ) => {
-
-
-
-          console.log(
-
-            `APPOINTMENT ${
-
-              index + 1
-
-            }:`
-
-          );
-
-
-
-          console.log(
-
-            "ID =",
-
-            appointment._id.toString()
-
-          );
-
-
-
-          console.log(
-
-            "PATIENT =",
-
-            appointment.patientName
-
-          );
-
-
-
-          console.log(
-
-            "DOCTOR ID =",
-
-            appointment.doctorId
-
-          );
-
-
-
-          console.log(
-
-            "DOCTOR NAME =",
-
-            appointment.doctorName
-
-          );
-
-
-
-          console.log(
-
-            "CONSULTATION TYPE =",
-
-            appointment.consultationType
-
-          );
-
-
-
-          console.log(
-
-            "CONSULTATION STATUS =",
-
-            appointment.consultationStatus
-
-          );
-
-
-
-          console.log(
-
-            "STATUS =",
-
-            appointment.status
-
-          );
-
-        }
-
-      );
-
-
-
-      console.log("=================================");
-
-
-
-      return res.json({
-
-        success: true,
-
-
-
-        appointments,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "GET DOCTOR APPOINTMENTS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -1494,83 +1441,61 @@ exports.getDoctorAppointments =
 
 // ============================================================
 
-
-
 exports.getPatientAppointments =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const {
 
+        patientPhone,
 
-      const {
+      } = req.params;
 
-        patientPhone,
+      const appointments =
 
-      } = req.params;
+        await Appointment.find({
 
+          patientPhone,
 
+        }).sort({
 
-      const appointments =
+          createdAt: -1,
 
-        await Appointment.find({
+        });
 
-          patientPhone,
+      return res.json({
 
-        }).sort({
+        success: true,
 
-          createdAt: -1,
+        appointments,
 
-        });
+      });
 
+    } catch (error) {
 
+      console.log(
 
-      return res.json({
+        "GET PATIENT APPOINTMENTS ERROR:",
 
-        success: true,
+        error
 
+      );
 
+      return res.status(500).json({
 
-        appointments,
+        success: false,
 
-      });
+        message:
 
+          error.message,
 
+      });
 
-    } catch (error) {
+    }
 
-
-
-      console.log(
-
-        "GET PATIENT APPOINTMENTS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -1578,89 +1503,65 @@ exports.getPatientAppointments =
 
 // ============================================================
 
-
-
 exports.getAppointmentById =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findById(
 
-      const appointment =
+          req.params.id
 
-        await Appointment.findById(
+        );
 
-          req.params.id
+      if (!appointment) {
 
-        );
+        return res.status(404).json({
 
+          success: false,
 
+          message:
 
-      if (!appointment) {
+            "Appointment not found",
 
-        return res.status(404).json({
+        });
 
-          success: false,
+      }
 
+      return res.json({
 
+        success: true,
 
-          message:
+        appointment,
 
-            "Appointment not found",
+      });
 
-        });
+    } catch (error) {
 
-      }
+      console.log(
 
+        "GET APPOINTMENT ERROR:",
 
+        error
 
-      return res.json({
+      );
 
-        success: true,
+      return res.status(500).json({
 
+        success: false,
 
+        message:
 
-        appointment,
+          error.message,
 
-      });
+      });
 
+    }
 
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "GET APPOINTMENT ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -1668,189 +1569,145 @@ exports.getAppointmentById =
 
 // ============================================================
 
-
-
 exports.updateAppointmentStatus =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const {
 
+        id,
 
-      const {
+      } = req.params;
 
-        id,
+      const {
 
-      } = req.params;
+        status,
 
+      } = req.body;
 
+      if (!status) {
 
-      const {
+        return res.status(400).json({
 
-        status,
+          success: false,
 
-      } = req.body;
+          message:
 
+            "Status is required",
 
+        });
 
-      if (!status) {
+      }
 
-        return res.status(400).json({
+      const allowedStatuses = [
 
-          success: false,
+        "Pending",
 
+        "Upcoming",
 
+        "Accepted",
 
-          message:
+        "Completed",
 
-            "Status is required",
+        "Cancelled",
 
-        });
+        "Rejected",
 
-      }
+      ];
 
+      if (
 
+        !allowedStatuses.includes(
 
-      const allowedStatuses = [
+          status
 
-        "Pending",
+        )
 
-        "Upcoming",
+      ) {
 
-        "Accepted",
+        return res.status(400).json({
 
-        "Completed",
+          success: false,
 
-        "Cancelled",
+          message:
 
-        "Rejected",
+            "Invalid appointment status",
 
-      ];
+        });
 
+      }
 
+      const appointment =
 
-      if (
+        await Appointment.findByIdAndUpdate(
 
-        !allowedStatuses.includes(
+          id,
 
-          status
+          {
 
-        )
+            status,
 
-      ) {
+          },
 
-        return res.status(400).json({
+          {
 
-          success: false,
+            new: true,
 
+          }
 
+        );
 
-          message:
+      if (!appointment) {
 
-            "Invalid appointment status",
+        return res.status(404).json({
 
-        });
+          success: false,
 
-      }
+          message:
 
+            "Appointment not found",
 
+        });
 
-      const appointment =
+      }
 
-        await Appointment.findByIdAndUpdate(
+      return res.json({
 
-          id,
+        success: true,
 
+        message:
 
+          "Appointment status updated successfully",
 
-          {
+        appointment,
 
-            status,
+      });
 
-          },
+    } catch (error) {
 
+      console.log(
 
+        "UPDATE APPOINTMENT STATUS ERROR:",
 
-          {
+        error
 
-            new: true,
+      );
 
-          }
+      return res.status(500).json({
 
-        );
+        success: false,
 
+        message:
 
+          error.message,
 
-      if (!appointment) {
+      });
 
-        return res.status(404).json({
+    }
 
-          success: false,
-
-
-
-          message:
-
-            "Appointment not found",
-
-        });
-
-      }
-
-
-
-      return res.json({
-
-        success: true,
-
-
-
-        message:
-
-          "Appointment status updated successfully",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "UPDATE APPOINTMENT STATUS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -1858,184 +1715,159 @@ exports.updateAppointmentStatus =
 
 // ============================================================
 
-
-
 exports.updatePaymentStatus =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const {
 
+        id,
 
-      const {
+      } = req.params;
 
-        id,
+      const {
 
-      } = req.params;
+        paymentStatus,
 
+        paymentId,
 
+        razorpayOrderId,
 
-      const {
+      } = req.body;
 
-        paymentStatus,
+      const existingAppointment =
 
-        paymentId,
-
-        razorpayOrderId,
-
-      } = req.body;
-
-
-
-      const existingAppointment =
         await Appointment.findById(id);
 
       if (!existingAppointment) {
+
         return res.status(404).json({
+
           success: false,
+
           message: "Appointment not found",
+
         });
+
       }
 
       // Doctor appointment payment can only be marked Paid by
+
       // the server-side Razorpay verification endpoint.
+
       if (
+
         existingAppointment.doctorId &&
+
         paymentStatus === "Paid"
+
       ) {
+
         return res.status(403).json({
+
           success: false,
+
           message:
+
             "Doctor appointment payments must be verified through Razorpay.",
+
         });
+
       }
 
       const updateData = {};
 
+      if (paymentStatus) {
 
+        updateData.paymentStatus =
 
-      if (paymentStatus) {
+          paymentStatus;
 
-        updateData.paymentStatus =
+      }
 
-          paymentStatus;
+      if (paymentId) {
 
-      }
+        updateData.paymentId =
 
+          paymentId;
 
+      }
 
-      if (paymentId) {
+      if (razorpayOrderId) {
 
-        updateData.paymentId =
+        updateData.razorpayOrderId =
 
-          paymentId;
+          razorpayOrderId;
 
-      }
+      }
 
+      const appointment =
 
+        await Appointment.findByIdAndUpdate(
 
-      if (razorpayOrderId) {
+          id,
 
-        updateData.razorpayOrderId =
+          updateData,
 
-          razorpayOrderId;
+          {
 
-      }
+            new: true,
 
+          }
 
+        );
 
-      const appointment =
+      if (!appointment) {
 
-        await Appointment.findByIdAndUpdate(
+        return res.status(404).json({
 
-          id,
+          success: false,
 
+          message:
 
+            "Appointment not found",
 
-          updateData,
+        });
 
+      }
 
+      return res.json({
 
-          {
+        success: true,
 
-            new: true,
+        message:
 
-          }
+          "Payment status updated",
 
-        );
+        appointment,
 
+      });
 
+    } catch (error) {
 
-      if (!appointment) {
+      console.log(
 
-        return res.status(404).json({
+        "UPDATE PAYMENT STATUS ERROR:",
 
-          success: false,
+        error
 
+      );
 
+      return res.status(500).json({
 
-          message:
+        success: false,
 
-            "Appointment not found",
+        message:
 
-        });
+          error.message,
 
-      }
+      });
 
+    }
 
-
-      return res.json({
-
-        success: true,
-
-
-
-        message:
-
-          "Payment status updated",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "UPDATE PAYMENT STATUS ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2043,91 +1875,67 @@ exports.updatePaymentStatus =
 
 // ============================================================
 
-
-
 exports.deleteAppointment =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findByIdAndDelete(
 
-      const appointment =
+          req.params.id
 
-        await Appointment.findByIdAndDelete(
+        );
 
-          req.params.id
+      if (!appointment) {
 
-        );
+        return res.status(404).json({
 
+          success: false,
 
+          message:
 
-      if (!appointment) {
+            "Appointment not found",
 
-        return res.status(404).json({
+        });
 
-          success: false,
+      }
 
+      return res.json({
 
+        success: true,
 
-          message:
+        message:
 
-            "Appointment not found",
+          "Appointment deleted successfully",
 
-        });
+      });
 
-      }
+    } catch (error) {
 
+      console.log(
 
+        "DELETE APPOINTMENT ERROR:",
 
-      return res.json({
+        error
 
-        success: true,
+      );
 
+      return res.status(500).json({
 
+        success: false,
 
-        message:
+        message:
 
-          "Appointment deleted successfully",
+          error.message,
 
-      });
+      });
 
+    }
 
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "DELETE APPOINTMENT ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2135,173 +1943,127 @@ exports.deleteAppointment =
 
 // ============================================================
 
-
-
 exports.startConsultation =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findById(
 
-      const appointment =
+          req.params.id
 
-        await Appointment.findById(
+        );
 
-          req.params.id
+      if (!appointment) {
 
-        );
+        return res.status(404).json({
 
+          success: false,
 
+          message:
 
-      if (!appointment) {
+            "Appointment not found",
 
-        return res.status(404).json({
+        });
 
-          success: false,
+      }
 
+      // ========================================================
 
+      // ONLY VIDEO CONSULTATION
 
-          message:
+      // ========================================================
 
-            "Appointment not found",
+      if (
 
-        });
+        appointment.consultationType !==
 
-      }
+        "Video Consultation"
 
+      ) {
 
+        return res.status(400).json({
 
-      // ========================================================
+          success: false,
 
-      // ONLY VIDEO CONSULTATION
+          message:
 
-      // ========================================================
+            "This appointment is not a video consultation",
 
+        });
 
+      }
 
-      if (
+      // ========================================================
 
-        appointment.consultationType !==
+      // CREATE / REUSE MEETING ID
 
-        "Video Consultation"
+      // ========================================================
 
-      ) {
+      const meetingId =
 
-        return res.status(400).json({
+        appointment.meetingId ||
 
-          success: false,
+        `healthhome-${appointment._id}`;
 
+      appointment.meetingId =
 
+        meetingId;
 
-          message:
+      // ========================================================
 
-            "This appointment is not a video consultation",
+      // MARK CONSULTATION READY
 
-        });
+      // ========================================================
 
-      }
+      appointment.consultationStatus =
 
+        "Ready";
 
+      appointment.status =
 
-      // ========================================================
+        "Upcoming";
 
-      // CREATE / REUSE MEETING ID
+      await appointment.save();
 
-      // ========================================================
+      return res.json({
 
+        success: true,
 
+        message:
 
-      const meetingId =
+          "Video consultation started",
 
-        appointment.meetingId ||
+        appointment,
 
-        `healthhome-${appointment._id}`;
+      });
 
+    } catch (error) {
 
+      console.log(
 
-      appointment.meetingId =
+        "START CONSULTATION ERROR:",
 
-        meetingId;
+        error
 
+      );
 
+      return res.status(500).json({
 
-      // ========================================================
+        success: false,
 
-      // MARK CONSULTATION READY
+        message:
 
-      // ========================================================
+          error.message,
 
+      });
 
+    }
 
-      appointment.consultationStatus =
-
-        "Ready";
-
-
-
-      appointment.status =
-
-        "Upcoming";
-
-
-
-      await appointment.save();
-
-
-
-      return res.json({
-
-        success: true,
-
-
-
-        message:
-
-          "Video consultation started",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "START CONSULTATION ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2309,113 +2071,83 @@ exports.startConsultation =
 
 // ============================================================
 
-
-
 exports.joinConsultation =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findByIdAndUpdate(
 
-      const appointment =
+          req.params.id,
 
-        await Appointment.findByIdAndUpdate(
+          {
 
-          req.params.id,
+            consultationStatus:
 
+              "Joined",
 
+          },
 
-          {
+          {
 
-            consultationStatus:
+            new: true,
 
-              "Joined",
+          }
 
-          },
+        );
 
+      if (!appointment) {
 
+        return res.status(404).json({
 
-          {
+          success: false,
 
-            new: true,
+          message:
 
-          }
+            "Appointment not found",
 
-        );
+        });
 
+      }
 
+      return res.json({
 
-      if (!appointment) {
+        success: true,
 
-        return res.status(404).json({
+        message:
 
-          success: false,
+          "Joined consultation",
 
+        appointment,
 
+      });
 
-          message:
+    } catch (error) {
 
-            "Appointment not found",
+      console.log(
 
-        });
+        "JOIN CONSULTATION ERROR:",
 
-      }
+        error
 
+      );
 
+      return res.status(500).json({
 
-      return res.json({
+        success: false,
 
-        success: true,
+        message:
 
+          error.message,
 
+      });
 
-        message:
+    }
 
-          "Joined consultation",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "JOIN CONSULTATION ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2423,105 +2155,75 @@ exports.joinConsultation =
 
 // ============================================================
 
-
-
 exports.checkReadyConsultation =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findOne({
 
-      const appointment =
+          patientPhone:
 
-        await Appointment.findOne({
+            req.params.patientPhone,
 
+          consultationStatus: { $in: ["Ready", "Joined"] },
 
+          consultationType:
 
-          patientPhone:
+            "Video Consultation",
 
-            req.params.patientPhone,
+          status: {
 
+            $nin: [
 
+              "Completed",
 
-          consultationStatus: { $in: ["Ready", "Joined"] },
+              "Cancelled",
 
+            ],
 
+          },
 
-          consultationType:
+        }).sort({
 
-            "Video Consultation",
+          createdAt: -1,
 
+        });
 
+      return res.json({
 
-          status: {
+        success: true,
 
-            $nin: [
+        appointment,
 
-              "Completed",
+      });
 
-              "Cancelled",
+    } catch (error) {
 
-            ],
+      console.log(
 
-          },
+        "CHECK READY CONSULTATION ERROR:",
 
+        error
 
+      );
 
-        }).sort({
+      return res.status(500).json({
 
-          createdAt: -1,
+        success: false,
 
-        });
+        message:
 
+          error.message,
 
+      });
 
-      return res.json({
+    }
 
-        success: true,
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "CHECK READY CONSULTATION ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2529,119 +2231,87 @@ exports.checkReadyConsultation =
 
 // ============================================================
 
-
-
 exports.completeConsultation =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const appointment =
 
+        await Appointment.findByIdAndUpdate(
 
-      const appointment =
+          req.params.id,
 
-        await Appointment.findByIdAndUpdate(
+          {
 
-          req.params.id,
+            status:
 
+              "Completed",
 
+            consultationStatus:
 
-          {
+              "Completed",
 
-            status:
+          },
 
-              "Completed",
+          {
 
+            new: true,
 
+          }
 
-            consultationStatus:
+        );
 
-              "Completed",
+      if (!appointment) {
 
-          },
+        return res.status(404).json({
 
+          success: false,
 
+          message:
 
-          {
+            "Appointment not found",
 
-            new: true,
+        });
 
-          }
+      }
 
-        );
+      return res.json({
 
+        success: true,
 
+        message:
 
-      if (!appointment) {
+          "Consultation completed successfully",
 
-        return res.status(404).json({
+        appointment,
 
-          success: false,
+      });
 
+    } catch (error) {
 
+      console.log(
 
-          message:
+        "COMPLETE CONSULTATION ERROR:",
 
-            "Appointment not found",
+        error
 
-        });
+      );
 
-      }
+      return res.status(500).json({
 
+        success: false,
 
+        message:
 
-      return res.json({
+          error.message,
 
-        success: true,
+      });
 
+    }
 
-
-        message:
-
-          "Consultation completed successfully",
-
-
-
-        appointment,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.log(
-
-        "COMPLETE CONSULTATION ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
-
-
-
+  };
 
 // ============================================================
 
@@ -2649,834 +2319,986 @@ exports.completeConsultation =
 
 // ============================================================
 
-
-
 exports.generateAgoraToken =
 
-  async (req, res) => {
+  async (req, res) => {
 
-    try {
+    try {
 
+      const {
 
+        appointmentId,
 
-      const {
+        uid,
 
-        appointmentId,
+      } = req.body;
 
-        uid,
+      console.log(
 
-      } = req.body;
+        "================================="
 
+      );
 
+      console.log(
 
-      console.log(
+        "GENERATE AGORA TOKEN"
 
-        "================================="
+      );
 
-      );
+      console.log(
 
+        "APPOINTMENT ID =",
 
+        appointmentId
 
-      console.log(
+      );
 
-        "GENERATE AGORA TOKEN"
+      console.log(
 
-      );
+        "UID =",
 
+        uid
 
+      );
 
-      console.log(
+      console.log(
 
-        "APPOINTMENT ID =",
+        "================================="
 
-        appointmentId
+      );
 
-      );
+      // ========================================================
 
+      // VALIDATION
 
+      // ========================================================
 
-      console.log(
+      if (!appointmentId) {
 
-        "UID =",
+        return res.status(400).json({
 
-        uid
+          success: false,
 
-      );
+          message:
 
+            "Appointment ID is required",
 
+        });
 
-      console.log(
+      }
 
-        "================================="
+      if (
 
-      );
+        uid === undefined ||
 
+        uid === null
 
+      ) {
 
-      // ========================================================
+        return res.status(400).json({
 
-      // VALIDATION
+          success: false,
 
-      // ========================================================
+          message:
 
+            "UID is required",
 
+        });
 
-      if (!appointmentId) {
+      }
 
-        return res.status(400).json({
+      const numericUid =
 
-          success: false,
+        Number(uid);
 
+      if (
 
+        !Number.isInteger(
 
-          message:
+          numericUid
 
-            "Appointment ID is required",
+        ) ||
 
-        });
+        numericUid < 0
 
-      }
+      ) {
 
+        return res.status(400).json({
 
+          success: false,
 
-      if (
+          message:
 
-        uid === undefined ||
+            "UID must be a valid number",
 
-        uid === null
+        });
 
-      ) {
+      }
 
-        return res.status(400).json({
+      // ========================================================
 
-          success: false,
+      // FIND APPOINTMENT
 
+      // ========================================================
 
+      const appointment =
 
-          message:
+        await Appointment.findById(
 
-            "UID is required",
+          appointmentId
 
-        });
+        );
 
-      }
+      if (!appointment) {
 
+        return res.status(404).json({
 
+          success: false,
 
-      const numericUid =
+          message:
 
-        Number(uid);
+            "Appointment not found",
 
+        });
 
+      }
 
-      if (
+      // ========================================================
 
-        !Number.isInteger(
+      // ONLY VIDEO CONSULTATIONS
 
-          numericUid
+      // ========================================================
 
-        ) ||
+      if (
 
-        numericUid < 0
+        appointment.consultationType !==
 
-      ) {
+        "Video Consultation"
 
-        return res.status(400).json({
+      ) {
 
-          success: false,
+        return res.status(400).json({
 
+          success: false,
 
+          message:
 
-          message:
+            "This appointment is not a video consultation",
 
-            "UID must be a valid number",
+        });
 
-        });
+      }
 
-      }
+      // ========================================================
 
+      // CONSULTATION MUST BE READY OR JOINED
 
+      // ========================================================
 
-      // ========================================================
+      if (
 
-      // FIND APPOINTMENT
+        appointment.consultationStatus !==
 
-      // ========================================================
+          "Ready" &&
 
+        appointment.consultationStatus !==
 
+          "Joined"
 
-      const appointment =
+      ) {
 
-        await Appointment.findById(
+        return res.status(400).json({
 
-          appointmentId
+          success: false,
 
-        );
+          message:
 
+            "Video consultation has not been started yet",
 
+        });
 
-      if (!appointment) {
+      }
 
-        return res.status(404).json({
+      // ========================================================
 
-          success: false,
+      // CHECK AGORA CREDENTIALS
 
+      // ========================================================
 
+      const appId =
 
-          message:
+        process.env.AGORA_APP_ID;
 
-            "Appointment not found",
+      const appCertificate =
 
-        });
+        process.env.AGORA_APP_CERTIFICATE;
 
-      }
+      if (
 
+        !appId ||
 
+        !appCertificate
 
-      // ========================================================
+      ) {
 
-      // ONLY VIDEO CONSULTATIONS
+        console.error(
 
-      // ========================================================
+          "AGORA_APP_ID or AGORA_APP_CERTIFICATE missing"
 
+        );
 
+        return res.status(500).json({
 
-      if (
+          success: false,
 
-        appointment.consultationType !==
+          message:
 
-        "Video Consultation"
+            "Agora server configuration is missing",
 
-      ) {
+        });
 
-        return res.status(400).json({
+      }
 
-          success: false,
+      // ========================================================
 
+      // CHANNEL NAME
 
+      // ========================================================
 
-          message:
+      const channelName =
 
-            "This appointment is not a video consultation",
+        appointment.meetingId ||
 
-        });
+        `healthhome-${appointment._id}`;
 
-      }
+      // ========================================================
 
+      // TOKEN EXPIRATION
 
+      // 1 HOUR
 
-      // ========================================================
+      // ========================================================
 
-      // CONSULTATION MUST BE READY OR JOINED
+      const tokenExpirationInSeconds =
 
-      // ========================================================
+        60 * 60;
 
+      const currentTimestamp =
 
+        Math.floor(
 
-      if (
+          Date.now() / 1000
 
-        appointment.consultationStatus !==
+        );
 
-          "Ready" &&
+      const privilegeExpiredTs =
 
-        appointment.consultationStatus !==
+        currentTimestamp +
 
-          "Joined"
+        tokenExpirationInSeconds;
 
-      ) {
+      // ========================================================
 
-        return res.status(400).json({
+      // GENERATE RTC TOKEN
 
-          success: false,
+      // ========================================================
 
+      const token =
 
+        RtcTokenBuilder.buildTokenWithUid(
 
-          message:
+          appId,
 
-            "Video consultation has not been started yet",
+          appCertificate,
 
-        });
+          channelName,
 
-      }
+          numericUid,
 
+          RtcRole.PUBLISHER,
 
+          privilegeExpiredTs,
 
-      // ========================================================
+          privilegeExpiredTs
 
-      // CHECK AGORA CREDENTIALS
+        );
 
-      // ========================================================
+      console.log(
 
+        "Agora token generated successfully"
 
+      );
 
-      const appId =
+      console.log(
 
-        process.env.AGORA_APP_ID;
+        "CHANNEL =",
 
+        channelName
 
+      );
 
-      const appCertificate =
+      console.log(
 
-        process.env.AGORA_APP_CERTIFICATE;
+        "UID =",
 
+        numericUid
 
+      );
 
-      if (
+      console.log(
 
-        !appId ||
+        "================================="
 
-        !appCertificate
+      );
 
-      ) {
+      // ========================================================
 
-        console.error(
+      // RESPONSE
 
-          "AGORA_APP_ID or AGORA_APP_CERTIFICATE missing"
+      // ========================================================
 
-        );
+      return res.status(200).json({
 
+        success: true,
 
+        appId:
 
-        return res.status(500).json({
+          appId,
 
-          success: false,
+        channelName:
 
+          channelName,
 
+        uid:
 
-          message:
+          numericUid,
 
-            "Agora server configuration is missing",
+        token:
 
-        });
+          token,
 
-      }
+        expiresAt:
 
+          privilegeExpiredTs,
 
+      });
 
-      // ========================================================
+    } catch (error) {
 
-      // CHANNEL NAME
+      console.error(
 
-      // ========================================================
+        "GENERATE AGORA TOKEN ERROR:",
 
+        error
 
+      );
 
-      const channelName =
+      return res.status(500).json({
 
-        appointment.meetingId ||
+        success: false,
 
-        `healthhome-${appointment._id}`;
+        message:
 
+          "Failed to generate Agora token",
 
+        error:
 
-      // ========================================================
+          error.message,
 
-      // TOKEN EXPIRATION
+      });
 
-      // 1 HOUR
+    }
 
-      // ========================================================
-
-
-
-      const tokenExpirationInSeconds =
-
-        60 * 60;
-
-
-
-      const currentTimestamp =
-
-        Math.floor(
-
-          Date.now() / 1000
-
-        );
-
-
-
-      const privilegeExpiredTs =
-
-        currentTimestamp +
-
-        tokenExpirationInSeconds;
-
-
-
-      // ========================================================
-
-      // GENERATE RTC TOKEN
-
-      // ========================================================
-
-
-
-      const token =
-
-        RtcTokenBuilder.buildTokenWithUid(
-
-          appId,
-
-          appCertificate,
-
-          channelName,
-
-          numericUid,
-
-          RtcRole.PUBLISHER,
-
-          privilegeExpiredTs,
-
-          privilegeExpiredTs
-
-        );
-
-
-
-      console.log(
-
-        "Agora token generated successfully"
-
-      );
-
-
-
-      console.log(
-
-        "CHANNEL =",
-
-        channelName
-
-      );
-
-
-
-      console.log(
-
-        "UID =",
-
-        numericUid
-
-      );
-
-
-
-      console.log(
-
-        "================================="
-
-      );
-
-
-
-      // ========================================================
-
-      // RESPONSE
-
-      // ========================================================
-
-
-
-      return res.status(200).json({
-
-        success: true,
-
-
-
-        appId:
-
-          appId,
-
-
-
-        channelName:
-
-          channelName,
-
-
-
-        uid:
-
-          numericUid,
-
-
-
-        token:
-
-          token,
-
-
-
-        expiresAt:
-
-          privilegeExpiredTs,
-
-      });
-
-
-
-    } catch (error) {
-
-
-
-      console.error(
-
-        "GENERATE AGORA TOKEN ERROR:",
-
-        error
-
-      );
-
-
-
-      return res.status(500).json({
-
-        success: false,
-
-
-
-        message:
-
-          "Failed to generate Agora token",
-
-
-
-        error:
-
-          error.message,
-
-      });
-
-    }
-
-  };
-
+  };
 
 /**
+
  * DOCTOR PROPOSES A NEW APPOINTMENT DATE/TIME
+
  *
+
  * PUT /api/appointments/:id/propose-reschedule
+
  *
+
  * Body:
+
  * {
+
  *   "proposedAppointmentDate": "2026-10-15",
+
  *   "proposedAppointmentTime": "11:00 AM",
+
  *   "rescheduleReason": "Doctor is unavailable at the original time"
+
  * }
+
  */
+
 exports.proposeReschedule = async (req, res) => {
+
   try {
+
     const {
+
       proposedAppointmentDate,
+
       proposedAppointmentTime,
+
       rescheduleReason,
+
     } = req.body;
 
     if (
+
       !proposedAppointmentDate ||
+
       !proposedAppointmentTime
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Proposed date and time are required",
+
       });
+
     }
 
     // Validate date format.
+
     const dateMatch =
+
       /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+
         proposedAppointmentDate
+
       );
 
     if (!dateMatch) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Date must use YYYY-MM-DD format",
+
       });
+
     }
 
     const year = Number(dateMatch[1]);
+
     const month = Number(dateMatch[2]);
+
     const day = Number(dateMatch[3]);
 
     const parsedDate = new Date(
+
       Date.UTC(year, month - 1, day)
+
     );
 
     if (
+
       parsedDate.getUTCFullYear() !== year ||
+
       parsedDate.getUTCMonth() !== month - 1 ||
+
       parsedDate.getUTCDate() !== day
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message: "Invalid proposed date",
+
       });
+
     }
 
     const Appointment = require("../models/Appointment");
 
     const appointment = await Appointment.findById(
+
       req.params.id
+
     );
 
     if (!appointment) {
+
       return res.status(404).json({
+
         success: false,
+
         message: "Appointment not found",
+
       });
+
+    }
+
+    const doctorForReschedule = await Doctor.findById(appointment.doctorId);
+    const proposedMinutes = parseAppointmentTime(proposedAppointmentTime);
+    if (proposedMinutes === null) {
+      return res.status(400).json({ success: false, message: "Invalid proposed time." });
+    }
+    const proposedTimeNormalized = formatAppointmentTime(proposedMinutes);
+    const proposedSlotError = await validateDoctorSlot({
+      doctor: doctorForReschedule,
+      date: proposedAppointmentDate,
+      time: proposedTimeNormalized,
+      excludeAppointmentId: appointment._id,
+    });
+    if (proposedSlotError) {
+      return res.status(400).json({ success: false, message: proposedSlotError });
     }
 
     if (
+
       !["Pending", "Upcoming", "Accepted"].includes(
+
         appointment.status
+
       )
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message:
+
           "This appointment cannot be rescheduled",
+
       });
+
     }
 
     if (
+
       appointment.patientResponse === "Pending" &&
+
       appointment.proposedAppointmentDate
+
     ) {
+
       return res.status(409).json({
+
         success: false,
+
         message:
+
           "A reschedule proposal is already awaiting the patient's response",
+
       });
+
     }
 
     if (
+
       proposedAppointmentDate === appointment.appointmentDate &&
-      proposedAppointmentTime.trim() ===
+
+      proposedTimeNormalized ===
+
         appointment.appointmentTime.trim()
+
     ) {
+
       return res.status(400).json({
+
         success: false,
+
         message:
+
           "The proposed time must differ from the current appointment",
+
       });
+
     }
 
     // Do not propose a slot already occupied by another
+
     // active appointment for this doctor.
+
     const conflictingAppointment =
+
       await Appointment.findOne({
+
         _id: { $ne: appointment._id },
+
         doctorId: appointment.doctorId,
+
         appointmentDate: proposedAppointmentDate,
-        appointmentTime: proposedAppointmentTime.trim(),
+
+        appointmentTime: proposedTimeNormalized,
+
         status: {
+
           $in: ["Pending", "Upcoming", "Accepted"],
+
         },
+
       });
 
     if (conflictingAppointment) {
+
       return res.status(409).json({
+
         success: false,
+
         message:
+
           "The proposed time is already booked. Please select another slot.",
+
       });
+
     }
 
     // Preserve the original appointment details.
+
     appointment.originalAppointmentDate =
+
       appointment.originalAppointmentDate ||
+
       appointment.appointmentDate;
 
     appointment.originalAppointmentTime =
+
       appointment.originalAppointmentTime ||
+
       appointment.appointmentTime;
 
     appointment.proposedAppointmentDate =
+
       proposedAppointmentDate;
 
     appointment.proposedAppointmentTime =
-      proposedAppointmentTime.trim();
+
+      proposedTimeNormalized;
 
     appointment.rescheduleRequestedBy = "Doctor";
 
     appointment.rescheduleReason =
+
       (rescheduleReason || "").trim();
 
     appointment.patientResponse = "Pending";
 
     appointment.rescheduleHistory.push({
+
       previousDate: appointment.appointmentDate,
+
       previousTime: appointment.appointmentTime,
+
       proposedDate: proposedAppointmentDate,
-      proposedTime: proposedAppointmentTime.trim(),
+
+      proposedTime: proposedTimeNormalized,
+
       requestedBy: "Doctor",
+
       reason: (rescheduleReason || "").trim(),
+
       requestedAt: new Date(),
+
     });
 
     await appointment.save();
 
     return res.status(200).json({
+
       success: true,
+
       message: "Reschedule proposal sent to the patient",
+
       appointment,
+
     });
+
   } catch (error) {
+
     console.error("PROPOSE RESCHEDULE ERROR:", error);
 
     if (error.code === 11000) {
+
       return res.status(409).json({
+
         success: false,
+
         message:
+
           "That appointment slot has just been booked. Choose another slot.",
+
       });
+
     }
 
     return res.status(500).json({
+
       success: false,
+
       message: "Failed to propose reschedule",
+
       error: error.message,
+
     });
+
   }
+
 };
 
-
 /**
+
  * PATIENT ACCEPTS OR DECLINES A PROPOSAL
+
  *
+
  * PUT /api/appointments/:id/respond-reschedule
+
  *
+
  * Body to accept:
+
  * { "response": "Accepted" }
+
  *
+
  * Body to decline:
+
  * { "response": "Declined" }
+
  */
 
 exports.respondToReschedule = async (req, res) => {
+
   try {
+
     const { response } = req.body;
 
     if (!["Accepted", "Requested Another Time"].includes(response)) {
+
       return res.status(400).json({
+
         success: false,
+
         message:
+
           'Response must be "Accepted" or "Requested Another Time"',
+
       });
+
     }
 
     const appointment = await Appointment.findById(req.params.id);
 
     if (!appointment) {
+
       return res.status(404).json({
+
         success: false,
+
         message: "Appointment not found",
+
       });
+
     }
 
     if (
+
       appointment.rescheduleRequestedBy !== "Doctor" ||
+
       appointment.patientResponse !== "Pending" ||
+
       !appointment.proposedAppointmentDate ||
+
       !appointment.proposedAppointmentTime
+
     ) {
+
       return res.status(409).json({
+
         success: false,
+
         message: "There is no pending doctor reschedule proposal",
+
       });
+
     }
 
     // Patient requests a different time.
+
     if (response === "Requested Another Time") {
+
       appointment.patientResponse = "Requested Another Time";
+
       appointment.proposedAppointmentDate = "";
+
       appointment.proposedAppointmentTime = "";
+
       appointment.rescheduleRequestedBy = "Patient";
 
       if (!Array.isArray(appointment.rescheduleHistory)) {
+
         appointment.rescheduleHistory = [];
+
       }
 
       appointment.rescheduleHistory.push({
+
         requestedBy: "Patient",
+
         date: new Date(),
+
         reason: "Patient requested another appointment time",
+
         status: "Requested Another Time",
+
       });
 
       await appointment.save();
 
       return res.status(200).json({
+
         success: true,
+
         message: "Request sent to the doctor for another time",
+
         appointment,
+
       });
+
     }
 
     // Patient accepts the doctor's proposed time.
+
     const proposedDate = appointment.proposedAppointmentDate;
-    const proposedTime = appointment.proposedAppointmentTime;
-
-    // Check whether another appointment has taken this slot.
-    const conflict = await Appointment.findOne({
-      _id: { $ne: appointment._id },
-      doctorId: appointment.doctorId,
-      appointmentDate: proposedDate,
-      appointmentTime: proposedTime,
-      status: {
-        $in: ["Pending", "Upcoming", "Accepted"],
-      },
+    const proposedTimeMinutes = parseAppointmentTime(appointment.proposedAppointmentTime);
+    if (proposedTimeMinutes === null) {
+      return res.status(400).json({ success: false, message: "Invalid proposed time." });
+    }
+    const proposedTime = formatAppointmentTime(proposedTimeMinutes);
+    const doctorForAcceptance = await Doctor.findById(appointment.doctorId);
+    const acceptanceSlotError = await validateDoctorSlot({
+      doctor: doctorForAcceptance,
+      date: proposedDate,
+      time: proposedTime,
+      excludeAppointmentId: appointment._id,
     });
-
-    if (conflict) {
+    if (acceptanceSlotError) {
       return res.status(409).json({
         success: false,
-        message:
-          "The proposed slot is no longer available. Please ask the doctor for another time.",
+        message: `The proposed slot is no longer valid: ${acceptanceSlotError}`,
       });
     }
 
+    // Check whether another appointment has taken this slot.
+
+    const conflict = await Appointment.findOne({
+
+      _id: { $ne: appointment._id },
+
+      doctorId: appointment.doctorId,
+
+      appointmentDate: proposedDate,
+
+      appointmentTime: proposedTime,
+
+      status: {
+
+        $in: ["Pending", "Upcoming", "Accepted"],
+
+      },
+
+    });
+
+    if (conflict) {
+
+      return res.status(409).json({
+
+        success: false,
+
+        message:
+
+          "The proposed slot is no longer available. Please ask the doctor for another time.",
+
+      });
+
+    }
+
     // Preserve payment status; only change appointment timing.
+
     appointment.appointmentDate = proposedDate;
+
     appointment.appointmentTime = proposedTime;
+
     appointment.patientResponse = "Accepted";
+
     appointment.proposedAppointmentDate = "";
+
     appointment.proposedAppointmentTime = "";
 
     if (!Array.isArray(appointment.rescheduleHistory)) {
+
       appointment.rescheduleHistory = [];
+
     }
 
     appointment.rescheduleHistory.push({
+
       requestedBy: "Doctor",
+
       date: new Date(),
+
       reason: appointment.rescheduleReason || "Doctor proposed a new time",
+
       status: "Accepted",
+
     });
 
     await appointment.save();
 
     return res.status(200).json({
+
       success: true,
+
       message: "Reschedule accepted successfully",
+
       appointment,
+
     });
+
   } catch (error) {
+
     console.error("RESPOND TO RESCHEDULE ERROR:", error);
 
     if (error.code === 11000) {
+
       return res.status(409).json({
+
         success: false,
+
         message:
+
           "That slot has just been booked. Please ask the doctor for another time.",
+
       });
+
     }
 
     return res.status(500).json({
+
       success: false,
+
       message: "Failed to respond to reschedule proposal",
+
       error: error.message,
+
     });
+
   }
+
 };
