@@ -1917,6 +1917,242 @@ const verifyCollectionOtp = async (
   }
 };
 
+
+/**
+ * Cancellation is allowed only before collection starts.
+ * Rescheduling requires laboratory approval.
+ */
+
+const canChangeLabBooking = (order) => {
+  return ["Pending", "Accepted"].includes(order.status);
+};
+
+// CANCEL LAB BOOKING
+const cancelLabOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { patientId, labId, cancelledBy, reason } = req.body;
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (!["Patient", "Laboratory"].includes(cancelledBy)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid cancellation requester.",
+      });
+    }
+
+    if (
+      cancelledBy === "Patient" &&
+      String(order.patientId) !== String(patientId)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Patient does not match this booking.",
+      });
+    }
+
+    if (
+      cancelledBy === "Laboratory" &&
+      String(order.labId) !== String(labId)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Laboratory does not match this booking.",
+      });
+    }
+
+    if (!canChangeLabBooking(order)) {
+      return res.status(400).json({
+        success: false,
+        message: "This booking can no longer be cancelled.",
+      });
+    }
+
+    order.status = "Cancelled";
+    order.cancelledBy = cancelledBy;
+    order.cancelledAt = new Date();
+    order.cancellationReason = String(reason || "").trim();
+    order.rescheduleStatus = "None";
+    order.rescheduleRequestedAt = null;
+    order.requestedScheduledAt = null;
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Lab booking cancelled successfully.",
+      order,
+    });
+  } catch (error) {
+    console.error("CANCEL LAB ORDER ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to cancel lab booking.",
+    });
+  }
+};
+
+// PATIENT REQUESTS RESCHEDULE
+const requestLabReschedule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { patientId, scheduledAt, reason } = req.body;
+
+    if (!patientId || !scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Patient ID and new date/time are required.",
+      });
+    }
+
+    const requestedDate = new Date(scheduledAt);
+
+    if (
+      Number.isNaN(requestedDate.getTime()) ||
+      requestedDate <= new Date()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose a valid future date and time.",
+      });
+    }
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (String(order.patientId) !== String(patientId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Patient does not match this booking.",
+      });
+    }
+
+    if (!canChangeLabBooking(order)) {
+      return res.status(400).json({
+        success: false,
+        message: "This booking can no longer be rescheduled.",
+      });
+    }
+
+    if (order.rescheduleStatus === "Pending") {
+      return res.status(400).json({
+        success: false,
+        message: "A reschedule request is already pending.",
+      });
+    }
+
+    order.previousScheduledAt = order.scheduledAt;
+    order.requestedScheduledAt = requestedDate;
+    order.rescheduleRequestedAt = new Date();
+    order.rescheduleReason = String(reason || "").trim();
+    order.rescheduleStatus = "Pending";
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Reschedule request sent to the laboratory.",
+      order,
+    });
+  } catch (error) {
+    console.error("RESCHEDULE REQUEST ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to request rescheduling.",
+    });
+  }
+};
+
+// LAB APPROVES OR REJECTS RESCHEDULE REQUEST
+const decideLabReschedule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { labId, decision } = req.body;
+
+    if (!["Approved", "Rejected"].includes(decision)) {
+      return res.status(400).json({
+        success: false,
+        message: "Decision must be Approved or Rejected.",
+      });
+    }
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (String(order.labId) !== String(labId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Laboratory does not match this booking.",
+      });
+    }
+
+    if (
+      order.rescheduleStatus !== "Pending" ||
+      !canChangeLabBooking(order)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "No eligible reschedule request is pending.",
+      });
+    }
+
+    if (decision === "Approved") {
+      if (
+        !order.requestedScheduledAt ||
+        new Date(order.requestedScheduledAt) <= new Date()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "The requested date/time is no longer valid.",
+        });
+      }
+
+      order.scheduledAt = order.requestedScheduledAt;
+    }
+
+    order.rescheduleStatus = decision;
+    order.requestedScheduledAt = null;
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Reschedule request ${decision.toLowerCase()}.`,
+      order,
+    });
+  } catch (error) {
+    console.error("RESCHEDULE DECISION ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to process reschedule request.",
+    });
+  }
+};
+
+
 // ============================================================
 // EXPORTS
 // ============================================================
@@ -1938,4 +2174,8 @@ module.exports = {
   generateCollectionOtp,
   getCollectionOtp,
   verifyCollectionOtp,
+
+   cancelLabOrder,
+  requestLabReschedule,
+  decideLabReschedule,
 };

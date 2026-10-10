@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const router = express.Router();
@@ -16,216 +17,64 @@ const {
   updateLabOrderStatus,
   uploadReport,
 
-  // ============================================================
-  // MSG91 COLLECTION OTP
-  // ============================================================
+  // Collection OTP
   generateCollectionOtp,
   verifyCollectionOtp,
   getCollectionOtp,
+
+  // Cancellation and rescheduling
+  cancelLabOrder,
+  requestLabReschedule,
+  decideLabReschedule,
 } = require("../controllers/labOrderController");
 
-
-// ============================================================
 // HEALTH CHECK
-// ============================================================
-
 router.get("/test", (req, res) => {
   res.send("Lab order route working");
 });
 
+// CREATE BOOKING
+router.post("/add", addLabOrder);
 
-// ============================================================
-// PATIENT CREATES BOOKING
-// ============================================================
+// GET ALL BOOKINGS
+router.get("/all", getLabOrders);
 
-router.post(
-  "/add",
-  addLabOrder
-);
-
-
-// ============================================================
-// LAB ORDER LIST
-// ============================================================
-
-router.get(
-  "/all",
-  getLabOrders
-);
-
-// ============================================================
-// PATIENT GETS COLLECTION OTP
-// ============================================================
-//
-// Used by Patient app to display the same OTP generated
-// for the Home Collection order.
-//
-// IMPORTANT:
-// This must be BEFORE /:id
-// ============================================================
-
-router.get(
-  "/collection-otp/:id",
-  getCollectionOtp
-);
-// ============================================================
-// GET SINGLE LAB ORDER
-// ============================================================
-
-router.get(
-  "/:id",
-  getLabOrderById
-);
-
-
-// ============================================================
-// LABORATORY WORKFLOW
-// ============================================================
-
-
-// ------------------------------------------------------------
-// ACCEPT LAB BOOKING
-// ------------------------------------------------------------
-
-router.put(
-  "/accept/:id",
-  acceptLabOrder
-);
-
-
-// ------------------------------------------------------------
-// REJECT LAB BOOKING
-// ------------------------------------------------------------
-
-router.put(
-  "/reject/:id",
-  rejectLabOrder
-);
-
-
-// ------------------------------------------------------------
-// ASSIGN SAMPLE COLLECTOR
-// ------------------------------------------------------------
-
-router.put(
-  "/assign-collector/:id",
-  assignSampleCollector
-);
-
-
-// ------------------------------------------------------------
-// COLLECTOR ON THE WAY
-// ------------------------------------------------------------
-
-router.put(
-  "/collector-on-the-way/:id",
-  collectorOnTheWay
-);
-
-
-// ============================================================
 // COLLECTION OTP
-// ============================================================
+// Keep this route before /:id.
+router.get("/collection-otp/:id", getCollectionOtp);
 
+// CANCEL BOOKING
+router.put("/cancel/:id", cancelLabOrder);
 
-// ------------------------------------------------------------
-// GENERATE + SEND OTP
-//
-// Patient receives OTP through normal SMS.
-// OTP itself is NOT returned to Flutter.
-//
-// Flow:
-// On The Way
-//     ↓
-// Generate OTP
-//     ↓
-// MSG91 sends SMS
-// ------------------------------------------------------------
+// PATIENT REQUESTS RESCHEDULE
+router.put("/reschedule/:id", requestLabReschedule);
 
-router.post(
-  "/generate-collection-otp/:id",
-  generateCollectionOtp
-);
-
-
-// ------------------------------------------------------------
-// VERIFY COLLECTION OTP
-//
-// Collector enters the OTP received from patient.
-//
-// Successful verification automatically changes:
-// On The Way
-//      ↓
-// Sample Collected
-// ------------------------------------------------------------
-
-router.post(
-  "/verify-collection-otp/:id",
-  verifyCollectionOtp
-);
-
-
-// ============================================================
-// OLD SAMPLE COLLECTED ENDPOINT
-//
-// IMPORTANT:
-// For Home Collection, this controller now requires
-// collectionOtpVerified === true.
-//
-// Flutter should preferably use:
-// /verify-collection-otp/:id
-//
-// after OTP verification.
-// ============================================================
-
+// LAB APPROVES OR REJECTS RESCHEDULE
 router.put(
-  "/sample-collected/:id",
-  markSampleCollected
+  "/reschedule/:id/decision",
+  decideLabReschedule
 );
 
+// GET SINGLE BOOKING
+router.get("/:id", getLabOrderById);
 
-// ============================================================
-// SAMPLE RECEIVED AT LAB
-// ============================================================
+// LABORATORY WORKFLOW
+router.put("/accept/:id", acceptLabOrder);
+router.put("/reject/:id", rejectLabOrder);
+router.put("/assign-collector/:id", assignSampleCollector);
+router.put("/collector-on-the-way/:id", collectorOnTheWay);
 
-router.put(
-  "/sample-received/:id",
-  markSampleReceived
-);
+// COLLECTION OTP VERIFICATION
+router.post("/generate-collection-otp/:id", generateCollectionOtp);
+router.post("/verify-collection-otp/:id", verifyCollectionOtp);
 
+// SAMPLE COLLECTION AND PROCESSING
+router.put("/sample-collected/:id", markSampleCollected);
+router.put("/sample-received/:id", markSampleReceived);
+router.put("/start-testing/:id", startTesting);
+router.put("/status/:id", updateLabOrderStatus);
 
-// ============================================================
-// START TESTING
-// ============================================================
-
-router.put(
-  "/start-testing/:id",
-  startTesting
-);
-
-
-// ============================================================
-// GENERAL STATUS UPDATE
-// ============================================================
-
-router.put(
-  "/status/:id",
-  updateLabOrderStatus
-);
-
-
-// ============================================================
-// LAB UPLOADS REPORT
-// ============================================================
-
-router.put(
-  "/report/:id",
-  uploadReport
-);
-
-
-// ============================================================
-// EXPORT ROUTER
-// ============================================================
+// UPLOAD LAB REPORT
+router.put("/report/:id", uploadReport);
 
 module.exports = router;
