@@ -3353,23 +3353,20 @@ exports.proposeReschedule = async (req, res) => {
  * Body to decline:
  * { "response": "Declined" }
  */
+
 exports.respondToReschedule = async (req, res) => {
   try {
     const { response } = req.body;
 
-    if (!["Accepted", "Declined"].includes(response)) {
+    if (!["Accepted", "Requested Another Time"].includes(response)) {
       return res.status(400).json({
         success: false,
         message:
-          'Response must be "Accepted" or "Declined"',
+          'Response must be "Accepted" or "Requested Another Time"',
       });
     }
 
-    const Appointment = require("../models/Appointment");
-
-    const appointment = await Appointment.findById(
-      req.params.id
-    );
+    const appointment = await Appointment.findById(req.params.id);
 
     if (!appointment) {
       return res.status(404).json({
@@ -3386,35 +3383,42 @@ exports.respondToReschedule = async (req, res) => {
     ) {
       return res.status(409).json({
         success: false,
-        message:
-          "There is no pending doctor reschedule proposal",
+        message: "There is no pending doctor reschedule proposal",
       });
     }
 
-    if (response === "Declined") {
-      appointment.patientResponse = "Declined";
-
-      // Keep the original appointment date/time unchanged.
+    // Patient requests a different time.
+    if (response === "Requested Another Time") {
+      appointment.patientResponse = "Requested Another Time";
       appointment.proposedAppointmentDate = "";
       appointment.proposedAppointmentTime = "";
+      appointment.rescheduleRequestedBy = "Patient";
+
+      if (!Array.isArray(appointment.rescheduleHistory)) {
+        appointment.rescheduleHistory = [];
+      }
+
+      appointment.rescheduleHistory.push({
+        requestedBy: "Patient",
+        date: new Date(),
+        reason: "Patient requested another appointment time",
+        status: "Requested Another Time",
+      });
 
       await appointment.save();
 
       return res.status(200).json({
         success: true,
-        message:
-          "Proposal declined. The original appointment remains unchanged.",
+        message: "Request sent to the doctor for another time",
         appointment,
       });
     }
 
-    const proposedDate =
-      appointment.proposedAppointmentDate;
+    // Patient accepts the doctor's proposed time.
+    const proposedDate = appointment.proposedAppointmentDate;
+    const proposedTime = appointment.proposedAppointmentTime;
 
-    const proposedTime =
-      appointment.proposedAppointmentTime;
-
-    // Recheck the slot immediately before accepting it.
+    // Check whether another appointment has taken this slot.
     const conflict = await Appointment.findOne({
       _id: { $ne: appointment._id },
       doctorId: appointment.doctorId,
@@ -3433,14 +3437,23 @@ exports.respondToReschedule = async (req, res) => {
       });
     }
 
-    // Move the appointment to the accepted time.
+    // Preserve payment status; only change appointment timing.
     appointment.appointmentDate = proposedDate;
     appointment.appointmentTime = proposedTime;
     appointment.patientResponse = "Accepted";
-
-    // Clear the proposal after applying it.
     appointment.proposedAppointmentDate = "";
     appointment.proposedAppointmentTime = "";
+
+    if (!Array.isArray(appointment.rescheduleHistory)) {
+      appointment.rescheduleHistory = [];
+    }
+
+    appointment.rescheduleHistory.push({
+      requestedBy: "Doctor",
+      date: new Date(),
+      reason: appointment.rescheduleReason || "Doctor proposed a new time",
+      status: "Accepted",
+    });
 
     await appointment.save();
 
