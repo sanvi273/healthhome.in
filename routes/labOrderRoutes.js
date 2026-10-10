@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const router = express.Router();
@@ -32,20 +33,24 @@ const {
 // ==========================================================
 // HEALTH CHECK
 // ==========================================================
+
 router.get("/test", (req, res) => {
-  res.send("Lab order route working");
+  res.status(200).send("Lab order route working");
 });
 
 // ==========================================================
 // CREATE AND FETCH BOOKINGS
 // ==========================================================
+
 router.post("/add", addLabOrder);
+
 router.get("/all", getLabOrders);
 
-// Keep specific routes before the /:id route.
 // ==========================================================
 // COLLECTION OTP
+// Keep these routes before the generic /:id route.
 // ==========================================================
+
 router.get("/collection-otp/:id", getCollectionOtp);
 
 router.post(
@@ -59,21 +64,30 @@ router.post(
 );
 
 // ==========================================================
-// CANCELLATION
+// CANCEL ENTIRE LAB BOOKING
 // ==========================================================
+
 router.put("/cancel/:id", cancelLabOrder);
 
 // ==========================================================
-// PATIENT REQUESTS RESCHEDULE
+// PATIENT REQUESTS A NEW DATE/TIME
+// PUT /api/lab-orders/reschedule/:id
 // ==========================================================
+
 router.put(
   "/reschedule/:id",
   requestLabReschedule
 );
 
 // ==========================================================
-// LAB APPROVES OR REJECTS PATIENT REQUEST
+// LAB ACCEPTS OR CANCELS PATIENT RESCHEDULE REQUEST
+// PUT /api/lab-orders/reschedule/:id/decision
+//
+// Body examples:
+// { "labId": "...", "decision": "Approved" }
+// { "labId": "...", "decision": "Cancelled" }
 // ==========================================================
+
 router.put(
   "/reschedule/:id/decision",
   decideLabReschedule
@@ -81,24 +95,36 @@ router.put(
 
 // ==========================================================
 // LAB PROPOSES A NEW DATE/TIME
+// PUT /api/lab-orders/reschedule/:id/propose
 // ==========================================================
+
 router.put(
   "/reschedule/:id/propose",
   proposeLabReschedule
 );
 
 // ==========================================================
-// PATIENT RESPONDS TO LAB PROPOSAL
+// PATIENT ACCEPTS OR DECLINES LAB PROPOSAL
+// PUT /api/lab-orders/reschedule/:id/respond
+//
+// Body examples:
+// { "patientId": "...", "decision": "Accepted" }
+// { "patientId": "...", "decision": "Declined" }
 // ==========================================================
+
 router.put(
   "/reschedule/:id/respond",
   respondToLabReschedule
 );
 
 // ==========================================================
-// LABORATORY WORKFLOW
+// LABORATORY BOOKING WORKFLOW
 // ==========================================================
+
 router.put("/accept/:id", acceptLabOrder);
+
+// Legacy endpoint retained for compatibility.
+// The updated dashboard should use Reschedule instead.
 router.put("/reject/:id", rejectLabOrder);
 
 router.put(
@@ -134,12 +160,14 @@ router.put(
 // ==========================================================
 // UPLOAD LAB REPORT
 // ==========================================================
+
 router.put("/report/:id", uploadReport);
 
 // ==========================================================
 // GET SINGLE BOOKING
-// Keep this generic route after all specific routes.
+// Keep generic route last.
 // ==========================================================
+
 router.get("/:id", getLabOrderById);
 
 module.exports = router;

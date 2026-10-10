@@ -12,21 +12,29 @@ const reportSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+
     fileName: {
       type: String,
       default: "",
+      trim: true,
     },
+
     fileUrl: {
       type: String,
       default: "",
+      trim: true,
     },
+
     fileType: {
       type: String,
       default: "",
+      trim: true,
     },
+
     pageNumber: {
       type: Number,
       default: 1,
+      min: 1,
     },
   },
   { _id: false }
@@ -178,16 +186,19 @@ const labOrderSchema = new mongoose.Schema(
     collectorId: {
       type: String,
       default: "",
+      trim: true,
     },
 
     collectorName: {
       type: String,
       default: "",
+      trim: true,
     },
 
     collectorPhone: {
       type: String,
       default: "",
+      trim: true,
     },
 
     collectorStatus: {
@@ -208,6 +219,7 @@ const labOrderSchema = new mongoose.Schema(
     collectionOtpHash: {
       type: String,
       default: "",
+      select: false,
     },
 
     collectionOtpExpiresAt: {
@@ -218,6 +230,7 @@ const labOrderSchema = new mongoose.Schema(
     collectionOtpAttempts: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     collectionOtpVerified: {
@@ -254,20 +267,27 @@ const labOrderSchema = new mongoose.Schema(
     },
 
     // ======================================================
-    // SCHEDULE AND RESCHEDULING
+    // CONFIRMED SCHEDULE
     // ======================================================
 
-    // Currently confirmed booking date/time.
+    // The currently confirmed booking date/time.
+    // This is changed only when the reschedule is accepted
+    // by the appropriate party.
     scheduledAt: {
       type: Date,
       default: null,
+      index: true,
     },
 
-    // Previously confirmed date/time.
+    // The date/time confirmed before the latest reschedule.
     previousScheduledAt: {
       type: Date,
       default: null,
     },
+
+    // ======================================================
+    // RESCHEDULE REQUEST
+    // ======================================================
 
     // Proposed date/time awaiting a decision.
     requestedScheduledAt: {
@@ -275,36 +295,67 @@ const labOrderSchema = new mongoose.Schema(
       default: null,
     },
 
-    // When the rescheduling request was created.
+    // When the current request was created.
     rescheduleRequestedAt: {
       type: Date,
       default: null,
     },
 
-    // Optional explanation for the proposed date/time.
+    // Reason for requesting a new date/time.
     rescheduleReason: {
       type: String,
       default: "",
       trim: true,
+      maxlength: 500,
     },
 
-    // None: no active request.
-    // Pending: awaiting a decision.
-    // Approved: rescheduling accepted.
-    // Rejected: rescheduling declined or rejected.
-    rescheduleStatus: {
-      type: String,
-      enum: ["None", "Pending", "Approved", "Rejected"],
-      default: "None",
-    },
-
-    // Identifies who initiated the rescheduling.
-    // Patient: patient requested a new date/time.
-    // Laboratory: laboratory proposed a new date/time.
+    // Who initiated the current request.
     rescheduleProposedBy: {
       type: String,
       enum: ["Patient", "Laboratory", null],
       default: null,
+    },
+
+    // Current reschedule request state.
+    rescheduleStatus: {
+      type: String,
+      enum: [
+        "None",
+        "Pending",
+        "Approved",
+        "Rejected",
+        "Cancelled",
+      ],
+      default: "None",
+      index: true,
+    },
+
+    // Who responded to the current reschedule request.
+    rescheduleRespondedBy: {
+      type: String,
+      enum: ["Patient", "Laboratory", null],
+      default: null,
+    },
+
+    // When the request was accepted, rejected, or cancelled.
+    rescheduleRespondedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Explanation for rejection or cancellation.
+    rescheduleResponseReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+
+    // Number of reschedule requests made for this booking.
+    rescheduleCount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     // ======================================================
@@ -315,9 +366,8 @@ const labOrderSchema = new mongoose.Schema(
       type: String,
       default: "",
       trim: true,
+      maxlength: 500,
     },
-
-
 
     cancelledBy: {
       type: String,
@@ -374,7 +424,19 @@ labOrderSchema.index({
   createdAt: -1,
 });
 
+// Find active reschedule requests for a laboratory.
+labOrderSchema.index({
+  labId: 1,
+  rescheduleStatus: 1,
+  rescheduleRequestedAt: -1,
+});
 
+// Find pending reschedule requests for a patient.
+labOrderSchema.index({
+  patientId: 1,
+  rescheduleStatus: 1,
+  rescheduleRequestedAt: -1,
+});
 
 // ==========================================================
 // MODEL
