@@ -3150,3 +3150,320 @@ exports.generateAgoraToken =
     }
 
   };
+
+
+/**
+ * DOCTOR PROPOSES A NEW APPOINTMENT DATE/TIME
+ *
+ * PUT /api/appointments/:id/propose-reschedule
+ *
+ * Body:
+ * {
+ *   "proposedAppointmentDate": "2026-10-15",
+ *   "proposedAppointmentTime": "11:00 AM",
+ *   "rescheduleReason": "Doctor is unavailable at the original time"
+ * }
+ */
+exports.proposeReschedule = async (req, res) => {
+  try {
+    const {
+      proposedAppointmentDate,
+      proposedAppointmentTime,
+      rescheduleReason,
+    } = req.body;
+
+    if (
+      !proposedAppointmentDate ||
+      !proposedAppointmentTime
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Proposed date and time are required",
+      });
+    }
+
+    // Validate date format.
+    const dateMatch =
+      /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+        proposedAppointmentDate
+      );
+
+    if (!dateMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Date must use YYYY-MM-DD format",
+      });
+    }
+
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+
+    const parsedDate = new Date(
+      Date.UTC(year, month - 1, day)
+    );
+
+    if (
+      parsedDate.getUTCFullYear() !== year ||
+      parsedDate.getUTCMonth() !== month - 1 ||
+      parsedDate.getUTCDate() !== day
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid proposed date",
+      });
+    }
+
+    const Appointment = require("../models/Appointment");
+
+    const appointment = await Appointment.findById(
+      req.params.id
+    );
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found",
+      });
+    }
+
+    if (
+      !["Pending", "Upcoming", "Accepted"].includes(
+        appointment.status
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This appointment cannot be rescheduled",
+      });
+    }
+
+    if (
+      appointment.patientResponse === "Pending" &&
+      appointment.proposedAppointmentDate
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "A reschedule proposal is already awaiting the patient's response",
+      });
+    }
+
+    if (
+      proposedAppointmentDate === appointment.appointmentDate &&
+      proposedAppointmentTime.trim() ===
+        appointment.appointmentTime.trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The proposed time must differ from the current appointment",
+      });
+    }
+
+    // Do not propose a slot already occupied by another
+    // active appointment for this doctor.
+    const conflictingAppointment =
+      await Appointment.findOne({
+        _id: { $ne: appointment._id },
+        doctorId: appointment.doctorId,
+        appointmentDate: proposedAppointmentDate,
+        appointmentTime: proposedAppointmentTime.trim(),
+        status: {
+          $in: ["Pending", "Upcoming", "Accepted"],
+        },
+      });
+
+    if (conflictingAppointment) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The proposed time is already booked. Please select another slot.",
+      });
+    }
+
+    // Preserve the original appointment details.
+    appointment.originalAppointmentDate =
+      appointment.originalAppointmentDate ||
+      appointment.appointmentDate;
+
+    appointment.originalAppointmentTime =
+      appointment.originalAppointmentTime ||
+      appointment.appointmentTime;
+
+    appointment.proposedAppointmentDate =
+      proposedAppointmentDate;
+
+    appointment.proposedAppointmentTime =
+      proposedAppointmentTime.trim();
+
+    appointment.rescheduleRequestedBy = "Doctor";
+
+    appointment.rescheduleReason =
+      (rescheduleReason || "").trim();
+
+    appointment.patientResponse = "Pending";
+
+    appointment.rescheduleHistory.push({
+      previousDate: appointment.appointmentDate,
+      previousTime: appointment.appointmentTime,
+      proposedDate: proposedAppointmentDate,
+      proposedTime: proposedAppointmentTime.trim(),
+      requestedBy: "Doctor",
+      reason: (rescheduleReason || "").trim(),
+      requestedAt: new Date(),
+    });
+
+    await appointment.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Reschedule proposal sent to the patient",
+      appointment,
+    });
+  } catch (error) {
+    console.error("PROPOSE RESCHEDULE ERROR:", error);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "That appointment slot has just been booked. Choose another slot.",
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to propose reschedule",
+      error: error.message,
+    });
+  }
+};
+
+
+/**
+ * PATIENT ACCEPTS OR DECLINES A PROPOSAL
+ *
+ * PUT /api/appointments/:id/respond-reschedule
+ *
+ * Body to accept:
+ * { "response": "Accepted" }
+ *
+ * Body to decline:
+ * { "response": "Declined" }
+ */
+exports.respondToReschedule = async (req, res) => {
+  try {
+    const { response } = req.body;
+
+    if (!["Accepted", "Declined"].includes(response)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Response must be "Accepted" or "Declined"',
+      });
+    }
+
+    const Appointment = require("../models/Appointment");
+
+    const appointment = await Appointment.findById(
+      req.params.id
+    );
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found",
+      });
+    }
+
+    if (
+      appointment.rescheduleRequestedBy !== "Doctor" ||
+      appointment.patientResponse !== "Pending" ||
+      !appointment.proposedAppointmentDate ||
+      !appointment.proposedAppointmentTime
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "There is no pending doctor reschedule proposal",
+      });
+    }
+
+    if (response === "Declined") {
+      appointment.patientResponse = "Declined";
+
+      // Keep the original appointment date/time unchanged.
+      appointment.proposedAppointmentDate = "";
+      appointment.proposedAppointmentTime = "";
+
+      await appointment.save();
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Proposal declined. The original appointment remains unchanged.",
+        appointment,
+      });
+    }
+
+    const proposedDate =
+      appointment.proposedAppointmentDate;
+
+    const proposedTime =
+      appointment.proposedAppointmentTime;
+
+    // Recheck the slot immediately before accepting it.
+    const conflict = await Appointment.findOne({
+      _id: { $ne: appointment._id },
+      doctorId: appointment.doctorId,
+      appointmentDate: proposedDate,
+      appointmentTime: proposedTime,
+      status: {
+        $in: ["Pending", "Upcoming", "Accepted"],
+      },
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The proposed slot is no longer available. Please ask the doctor for another time.",
+      });
+    }
+
+    // Move the appointment to the accepted time.
+    appointment.appointmentDate = proposedDate;
+    appointment.appointmentTime = proposedTime;
+    appointment.patientResponse = "Accepted";
+
+    // Clear the proposal after applying it.
+    appointment.proposedAppointmentDate = "";
+    appointment.proposedAppointmentTime = "";
+
+    await appointment.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Reschedule accepted successfully",
+      appointment,
+    });
+  } catch (error) {
+    console.error("RESPOND TO RESCHEDULE ERROR:", error);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "That slot has just been booked. Please ask the doctor for another time.",
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to respond to reschedule proposal",
+      error: error.message,
+    });
+  }
+};

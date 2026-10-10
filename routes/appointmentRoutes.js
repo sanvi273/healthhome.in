@@ -22,6 +22,8 @@ const {
   checkReadyConsultation,
   completeConsultation,
   generateAgoraToken,
+  proposeReschedule,
+  respondToReschedule,
 } = require("../controllers/appointmentController");
 
 // ============================================================
@@ -177,6 +179,25 @@ router.put(
   completeConsultation
 );
 
+// ============================================================
+// DOCTOR PROPOSES A NEW APPOINTMENT TIME
+// PUT /api/appointments/:id/propose-reschedule
+// ============================================================
+
+router.put(
+  "/:id/propose-reschedule",
+  proposeReschedule
+);
+
+// ============================================================
+// PATIENT RESPONDS TO A RESCHEDULE PROPOSAL
+// PUT /api/appointments/:id/respond-reschedule
+// ============================================================
+
+router.put(
+  "/:id/respond-reschedule",
+  respondToReschedule
+);
 // ============================================================
 // DELETE APPOINTMENT
 // DELETE
