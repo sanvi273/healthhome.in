@@ -1,7 +1,7 @@
 const User = require("../models/user");
+const Verification = require("../models/verification");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-
 // ============================================================
 // GENERATE HEALTHHOME VERIFICATION ID
 // ============================================================
@@ -351,6 +351,36 @@ const registerUser = async (req, res) => {
                     verificationId,
             });
 
+
+// ====================================================
+// AUTOMATIC PROFESSIONAL VERIFICATION APPLICATION
+// ====================================================
+
+if (
+  ["doctor", "laboratory", "pharmacy"].includes(normalizedRole)
+) {
+  try {
+    await Verification.create({
+      userId: user._id,
+      verificationId: user.verificationId,
+      role: normalizedRole,
+      professionalName: user.name,
+      licenseNumber: "",
+      organizationName: "",
+      address: "",
+      documents: [],
+      notes: "",
+      status: "PENDING",
+    });
+
+    console.log(
+      `Verification created for ${user.name} (${normalizedRole})`
+    );
+  } catch (verificationError) {
+    await User.findByIdAndDelete(user._id);
+    throw verificationError;
+  }
+}
 
         // ====================================================
         // RESPONSE MESSAGE

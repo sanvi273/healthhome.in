@@ -1,132 +1,94 @@
+
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
-const dotenv = require("dotenv");
-
-dotenv.config();
+require("dotenv").config();
 
 const User = require("./models/user");
 
-const createAdmin = async () => {
+async function createAdmin() {
   try {
-    // =====================================================
-    // CONNECT TO MONGODB
-    // =====================================================
+    // Support common MongoDB environment variable names
+    const mongoUri =
+      process.env.MONGO_URI ||
+      process.env.MONGODB_URI ||
+      process.env.MONGO_URL;
 
-    await mongoose.connect(process.env.MONGO_URL);
+    const phone = process.env.ADMIN_PHONE;
+    const password = process.env.ADMIN_PASSWORD;
+    const email = process.env.ADMIN_EMAIL;
 
-    console.log("✅ MongoDB Connected");
-
-    // =====================================================
-    // ADMIN DETAILS
-    // =====================================================
-
-    const name = "HealthHome Admin";
-    const email = "admin@healthhome.com";
-    const phone = "9999999999";
-    const password = "Admin@12345";
-
-    // =====================================================
-    // CHECK IF ADMIN ALREADY EXISTS
-    // =====================================================
-
-    const existingAdmin = await User.findOne({
-      role: "admin",
-    });
-
-    if (existingAdmin) {
-      console.log("⚠️ Admin already exists:");
-      console.log({
-        name: existingAdmin.name,
-        email: existingAdmin.email,
-        phone: existingAdmin.phone,
-        role: existingAdmin.role,
-      });
-
-      await mongoose.connection.close();
-      return;
+    // Validate environment variables
+    if (!mongoUri) {
+      throw new Error(
+        "MongoDB URL missing. Add MONGO_URI or MONGODB_URI to your .env file."
+      );
     }
 
-    // =====================================================
-    // CHECK EMAIL
-    // =====================================================
-
-    const existingEmail = await User.findOne({
-      email: email.toLowerCase(),
-    });
-
-    if (existingEmail) {
-      console.log("❌ Email already exists:", email);
-      await mongoose.connection.close();
-      return;
+    if (!phone || !password) {
+      throw new Error(
+        "ADMIN_PHONE and ADMIN_PASSWORD are required in .env"
+      );
     }
 
-    // =====================================================
-    // CHECK PHONE
-    // =====================================================
-
-    const existingPhone = await User.findOne({
-      phone: phone,
-    });
-
-    if (existingPhone) {
-      console.log("❌ Phone already exists:", phone);
-      await mongoose.connection.close();
-      return;
+    if (password.length < 8) {
+      throw new Error("Admin password must contain at least 8 characters.");
     }
 
-    // =====================================================
-    // HASH PASSWORD
-    // =====================================================
+    // Connect to MongoDB
+    await mongoose.connect(mongoUri);
+
+    console.log("MongoDB connected successfully.");
+
+    // Check whether this phone number already exists
+    const existing = await User.findOne({ phone });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // =====================================================
-    // CREATE ADMIN
-    // =====================================================
+    if (existing) {
+      // Never accidentally promote an existing professional/patient
+      if (existing.role !== "admin") {
+        throw new Error(
+          "This phone number already belongs to a non-admin account. Use a different phone number."
+        );
+      }
 
-    const admin = await User.create({
-      name: name,
-      email: email.toLowerCase(),
-      password: hashedPassword,
-      role: "admin",
-      phone: phone,
+      existing.name = "HealthHome Admin";
+      existing.password = hashedPassword;
+      existing.accountStatus = "ACTIVE";
+      existing.verificationStatus = "NOT_REQUIRED";
 
-      accountStatus: "ACTIVE",
+      if (email) {
+        existing.email = email;
+      }
 
-      verificationStatus: "NOT_REQUIRED",
+      await existing.save();
 
-      verificationId: "",
-    });
+      console.log("Existing Admin account updated successfully.");
+    } else {
+      // Create new Admin
+      await User.create({
+        name: "HealthHome Admin",
+        email: email || undefined,
+        phone: phone,
+        password: hashedPassword,
+        role: "admin",
+        accountStatus: "ACTIVE",
+        verificationStatus: "NOT_REQUIRED",
+      });
 
-    // =====================================================
-    // SUCCESS
-    // =====================================================
+      console.log("Admin account created successfully!");
+    }
 
-    console.log("\n========================================");
-    console.log("✅ ADMIN CREATED SUCCESSFULLY");
-    console.log("========================================");
-
-    console.log("Name:", admin.name);
-    console.log("Email:", admin.email);
-    console.log("Phone:", admin.phone);
-    console.log("Role:", admin.role);
-    console.log("Account Status:", admin.accountStatus);
-    console.log("Verification Status:", admin.verificationStatus);
-
-    console.log("\nAdmin Login Credentials:");
-    console.log("Phone:", phone);
-    console.log("Password:", password);
-
-    console.log("========================================\n");
-
-    await mongoose.connection.close();
-
+    console.log("Admin phone:", phone);
+    console.log("Admin role: admin");
   } catch (error) {
-    console.error("❌ CREATE ADMIN ERROR:", error);
-
-    await mongoose.connection.close();
-    process.exit(1);
+    console.error("Admin creation failed:", error.message);
+  } finally {
+    // Disconnect only if MongoDB was connected
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
   }
-};
+}
 
 createAdmin();
