@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 // ============================================================
@@ -58,6 +59,13 @@ const labTestSchema = new mongoose.Schema(
 
 const labSchema = new mongoose.Schema(
   {
+    // Link Lab profile to registered User account
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     name: {
       type: String,
       required: true,

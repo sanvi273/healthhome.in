@@ -1,44 +1,123 @@
 const Lab = require("../models/lab");
-
+const User = require("../models/user");
 // ============================================================
 // ADD LAB
 // ============================================================
 
+
 const addLab = async (req, res) => {
   try {
-    const existingLab = await Lab.findOne({
-      phone: req.body.phone,
+    // 1. Verify authenticated user
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    // 2. Only Laboratory accounts can create Lab profiles
+    if (req.user.role !== "laboratory") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Laboratory accounts can create a Lab profile.",
+      });
+    }
+
+    // 3. Get the actual registered user from MongoDB
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Registered user account not found.",
+      });
+    }
+
+    if (!user.phone || !user.phone.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Registered phone number not found.",
+      });
+    }
+
+    const {
+      name,
+      labType,
+      experience,
+      address,
+    } = req.body;
+
+    if (!name || !labType || !experience || !address) {
+      return res.status(400).json({
+        success: false,
+        message: "All Lab profile fields are required.",
+      });
+    }
+
+    // Always use the phone number stored in the authenticated account.
+    const registeredPhone = user.phone.trim();
+
+    // 4. Find existing Lab profile using registered phone
+    let existingLab = await Lab.findOne({
+      phone: registeredPhone,
     });
 
     if (existingLab) {
-      existingLab.name = req.body.name;
-      existingLab.labType = req.body.labType;
-      existingLab.experience = req.body.experience;
-      existingLab.address = req.body.address;
+      // Prevent another account from taking ownership
+      if (
+        existingLab.userId &&
+        String(existingLab.userId) !== String(user._id)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "This Lab profile belongs to another account.",
+        });
+      }
+
+      // Link existing legacy profile to authenticated user
+      existingLab.userId = user._id;
+
+      existingLab.name = name.trim();
+      existingLab.labType = labType.trim();
+      existingLab.experience = experience.trim();
+      existingLab.address = address.trim();
 
       await existingLab.save();
 
       return res.status(200).json({
         success: true,
-        message: "Lab updated successfully",
+        message: "Lab profile updated and linked successfully.",
         lab: existingLab,
       });
     }
 
-    const lab = await Lab.create(req.body);
+    // 5. Create new Lab profile with authenticated userId
+    const lab = await Lab.create({
+      userId: user._id,
+      name: name.trim(),
+      labType: labType.trim(),
+      experience: experience.trim(),
+      address: address.trim(),
+      phone: registeredPhone,
+    });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: "Lab added successfully",
+      message: "Lab profile created and linked successfully.",
       lab,
     });
+
   } catch (error) {
-    res.status(500).json({
+    console.error("ADD LAB ERROR:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Unable to save Lab profile.",
+      error: error.message,
     });
   }
 };
+
 
 // ============================================================
 // GET ALL LABS
