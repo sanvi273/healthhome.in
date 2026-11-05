@@ -1,6 +1,6 @@
 
 const express = require("express");
-
+const authMiddleware = require("../middleware/authMiddleware");
 const router = express.Router();
 
 const {
@@ -172,6 +172,7 @@ router.put("/report/:id", uploadReport);
 
 router.put(
   "/prescription-payment/amount/:id",
+  authMiddleware,
   setPrescriptionLabAmount
 );
 

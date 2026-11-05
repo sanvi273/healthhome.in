@@ -22,6 +22,12 @@ const appointmentSchema = new mongoose.Schema(
       trim: true,
     },
 
+    patientId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  required: false,
+  default: null,
+},
     
     // ==========================================================
     // RESCHEDULING

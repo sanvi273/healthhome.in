@@ -16,7 +16,7 @@ const Payment = require("../models/Payment");
 
 const Order = require("../models/orderModel");
 
-
+const User = require("../models/user");
 
 
 
@@ -736,91 +736,40 @@ const getServiceData = async (
 
 
 
-const validatePatientForService = (
 
-  data,
+const validatePatientForService = (data, user) => {
+  if (!data || !user) {
+    return false;
+  }
 
-  userId,
+  // Doctor payments use a separate appointment flow.
+  if (data.serviceType === "Doctor") {
+    return true;
+  }
 
-  userPhone
+  const authenticatedUserId = safeString(user._id);
+  const authenticatedPhone = safeString(user.phone);
 
-) => {
+  const bookingPatientId = safeString(data.patientId);
+  const bookingPatientPhone = safeString(data.patientPhone);
 
+  const matchesId =
+    authenticatedUserId &&
+    bookingPatientId &&
+    authenticatedUserId === bookingPatientId;
 
+  const matchesPhone =
+    authenticatedPhone &&
+    bookingPatientPhone &&
+    authenticatedPhone === bookingPatientPhone;
 
-  // Doctor payment is allowed before
-
-  // appointment creation.
-
-
-
-  if (
-
-    data.serviceType === "Doctor"
-
-  ) {
-
-    return true;
-
-  }
-
-
-
-
-
-  const requestedUserId =
-
-    safeString(userId);
-
-
-
-
-
-  const requestedPhone =
-
-    safeString(userPhone);
-
-
-
-
-
-  const matchesId =
-
-    requestedUserId &&
-
-    data.patientId &&
-
-    requestedUserId ===
-
-      data.patientId;
-
-
-
-
-
-  const matchesPhone =
-
-    requestedPhone &&
-
-    data.patientPhone &&
-
-    requestedPhone ===
-
-      data.patientPhone;
-
-
-
-
-
-  return Boolean(
-
-    matchesId ||
-
-    matchesPhone
-
-  );
-
+  return Boolean(matchesId || matchesPhone);
 };
+
+
+
+
+
 
 
 
@@ -1026,32 +975,44 @@ exports.createDoctorOrder = async (req, res) => {
 
 
 
-    const {
+  const {
+  doctorId,
+  doctorName,
+  specialization,
+  hospital,
+  consultationType,
+  appointmentDate,
+  appointmentTime,
+} = req.body;
 
-      userId,
+const authenticatedUser = await User.findById(req.user.id);
 
-      patientName,
+if (!authenticatedUser) {
+  return res.status(401).json({
+    success: false,
+    message: "Authenticated user not found.",
+  });
+}
 
-      patientPhone,
+if (
+  authenticatedUser.role !== "patient" ||
+  authenticatedUser.accountStatus !== "ACTIVE"
+) {
+  return res.status(403).json({
+    success: false,
+    message: "Only active patients can book appointments.",
+  });
+}
 
-      doctorId,
+const patientName = authenticatedUser.name;
+const patientPhone = authenticatedUser.phone;
 
-      doctorName,
-
-      specialization,
-
-      hospital,
-
-      consultationType,
-
-      appointmentDate,
-
-      appointmentTime,
-
-    } = req.body;
-
-
-
+if (!patientName || !patientPhone) {
+  return res.status(400).json({
+    success: false,
+    message: "Patient name and phone are required in your account.",
+  });
+}
     if (
 
       !patientName ||
@@ -3839,20 +3800,8 @@ exports.createOrder = async (req, res) => {
 
 
 
-    const {
-
-      serviceType,
-
-      serviceId,
-
-      userId,
-
-      userName,
-
-      userPhone,
-
-    } = req.body;
-
+    
+const { serviceType, serviceId } = req.body;
 
 
 
@@ -3968,8 +3917,28 @@ exports.createOrder = async (req, res) => {
       );
 
 
+const authenticatedUser = await User.findById(req.user.id);
 
+if (!authenticatedUser) {
+  return res.status(401).json({
+    success: false,
+    message: "Authenticated user not found",
+  });
+}
 
+if (authenticatedUser.role !== "patient") {
+  return res.status(403).json({
+    success: false,
+    message: "Only patients can make this payment",
+  });
+}
+
+if (authenticatedUser.accountStatus !== "ACTIVE") {
+  return res.status(403).json({
+    success: false,
+    message: "Your account is not active",
+  });
+}
 
     // --------------------------------------------------------
 
@@ -3979,17 +3948,10 @@ exports.createOrder = async (req, res) => {
 
 
 
-    const validPatient =
-
-      validatePatientForService(
-
-        data,
-
-        userId,
-
-        userPhone
-
-      );
+    const validPatient = validatePatientForService(
+  data,
+  authenticatedUser
+);
 
 
 
@@ -4139,14 +4101,8 @@ exports.createOrder = async (req, res) => {
 
 
 
-          userId: normalizedUserId,
-
-
-
-          userPhone:
-
-            safeString(userPhone),
-
+         userId: String(authenticatedUser._id),
+userPhone: safeString(authenticatedUser.phone)
         },
 
       });
@@ -4183,7 +4139,7 @@ exports.createOrder = async (req, res) => {
 
         userId:
 
-          safeString(userId),
+          String(authenticatedUser._id),
 
 
 
@@ -4444,22 +4400,12 @@ exports.verifyPayment = async (
 
 
     const {
-
-      razorpay_order_id,
-
-      razorpay_payment_id,
-
-      razorpay_signature,
-
-      serviceType,
-
-      serviceId,
-
-      userId,
-
-      userPhone,
-
-    } = req.body;
+  razorpay_order_id,
+  razorpay_payment_id,
+  razorpay_signature,
+  serviceType,
+  serviceId,
+} = req.body;
 
 
 
@@ -4555,7 +4501,26 @@ exports.verifyPayment = async (
 
       );
 
+const authenticatedUser = await User.findById(req.user.id);
 
+if (!authenticatedUser) {
+  return res.status(401).json({
+    success: false,
+    paid: false,
+    message: "Authenticated user not found.",
+  });
+}
+
+if (
+  authenticatedUser.role !== "patient" ||
+  authenticatedUser.accountStatus !== "ACTIVE"
+) {
+  return res.status(403).json({
+    success: false,
+    paid: false,
+    message: "Only active patient accounts can verify payments.",
+  });
+}
 
 
 
@@ -4567,17 +4532,10 @@ exports.verifyPayment = async (
 
 
 
-    const validPatient =
-
-      validatePatientForService(
-
-        data,
-
-        userId,
-
-        userPhone
-
-      );
+ const validPatient = validatePatientForService(
+  data,
+  authenticatedUser
+);
 
 
 
@@ -4855,185 +4813,15 @@ exports.verifyPayment = async (
 
 
 
-    let paymentRecord =
-
-      await Payment.findOne({
-
-        orderId:
-
-          razorpay_order_id,
-
-        serviceType:
-
-          serviceType,
-
-        serviceId:
-
-          String(serviceId),
-
-      });
-
-
-
-
-
-    if (!paymentRecord) {
-
-
-
-      paymentRecord =
-
-        await Payment.create({
-
-
-
-          orderId:
-
-            razorpay_order_id,
-
-
-
-          paymentId:
-
-            razorpay_payment_id,
-
-
-
-          signature:
-
-            razorpay_signature,
-
-
-
-          userId:
-
-            safeString(userId),
-
-
-
-          userName:
-
-            data.patientName ||
-
-            "HealthHome User",
-
-
-
-          userPhone:
-
-            data.patientPhone ||
-
-            safeString(userPhone),
-
-
-
-          serviceType:
-
-            serviceType,
-
-
-
-          serviceId:
-
-            String(serviceId),
-
-
-
-          amount:
-
-            Number(data.amount),
-
-
-
-          currency:
-
-            "INR",
-
-
-
-          paymentMethod:
-
-            safeString(
-
-              razorpayPayment.method
-
-            ).toUpperCase(),
-
-
-
-          status:
-
-            "Success",
-
-
-
-          razorpayStatus:
-
-            razorpayPayment.status,
-
-
-
-          providerId:
-
-            data.providerId,
-
-
-
-          providerType:
-
-            data.providerType,
-
-
-
-          providerAmount:
-
-            Number(data.amount),
-
-        });
-
-
-
-    } else {
-
-
-
-      paymentRecord.paymentId =
-
-        razorpay_payment_id;
-
-
-
-      paymentRecord.signature =
-
-        razorpay_signature;
-
-
-
-      paymentRecord.status =
-
-        "Success";
-
-
-
-      paymentRecord.razorpayStatus =
-
-        razorpayPayment.status;
-
-
-
-      paymentRecord.paymentMethod =
-
-        safeString(
-
-          razorpayPayment.method
-
-        ).toUpperCase();
-
-
-
-      await paymentRecord.save();
-
-    }
+paymentRecord.paymentId = razorpay_payment_id;
+paymentRecord.signature = razorpay_signature;
+paymentRecord.status = "Success";
+paymentRecord.razorpayStatus = razorpayPayment.status;
+paymentRecord.paymentMethod = safeString(
+  razorpayPayment.method
+).toUpperCase();
+
+await paymentRecord.save();
 
 
 

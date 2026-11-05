@@ -1,6 +1,7 @@
-
 const LabOrder = require("../models/labOrder");
 const SampleCollector = require("../models/sampleCollector");
+const Lab = require("../models/lab");
+const User = require("../models/user");
 const crypto = require("crypto");
 
 // ============================================================
@@ -581,11 +582,58 @@ const markSampleCollected = async (req, res) => {
 // SET FINAL AMOUNT FOR PRESCRIPTION LAB BOOKING
 // ============================================================
 
+
 const setPrescriptionLabAmount = async (req, res) => {
   try {
     const { id } = req.params;
-    const { amount, labId } = req.body;
+    const { amount } = req.body;
 
+    // 1. Authentication check
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    // 2. Only Laboratory accounts are allowed
+    if (req.user.role !== "laboratory") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Laboratory accounts can set prescription lab amounts.",
+      });
+    }
+
+    // 3. Check that the account is approved
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Laboratory user account not found.",
+      });
+    }
+
+    if (user.verificationStatus !== "APPROVED") {
+      return res.status(403).json({
+        success: false,
+        message: "Laboratory verification is not approved.",
+      });
+    }
+
+    // 4. Find the Lab profile owned by this account
+    const lab = await Lab.findOne({
+      userId: user._id,
+    });
+
+    if (!lab) {
+      return res.status(404).json({
+        success: false,
+        message: "Laboratory profile not found or not linked.",
+      });
+    }
+
+    // 5. Validate amount
     const finalAmount = Number(amount);
 
     if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
@@ -595,13 +643,7 @@ const setPrescriptionLabAmount = async (req, res) => {
       });
     }
 
-    if (!labId) {
-      return res.status(400).json({
-        success: false,
-        message: "Laboratory ID is required.",
-      });
-    }
-
+    // 6. Find booking
     const order = await LabOrder.findById(id);
 
     if (!order) {
@@ -611,6 +653,7 @@ const setPrescriptionLabAmount = async (req, res) => {
       });
     }
 
+    // 7. Verify booking type
     if (order.bookingType !== "PRESCRIPTION") {
       return res.status(400).json({
         success: false,
@@ -618,13 +661,15 @@ const setPrescriptionLabAmount = async (req, res) => {
       });
     }
 
-    if (String(order.labId) !== String(labId)) {
+    // 8. Verify ownership using authenticated Lab profile
+    if (String(order.labId) !== String(lab._id)) {
       return res.status(403).json({
         success: false,
-        message: "This booking does not belong to this laboratory.",
+        message: "This booking does not belong to your laboratory.",
       });
     }
 
+    // 9. Sample must be collected or received
     if (
       !["Sample Collected", "Sample Received"].includes(order.status)
     ) {
@@ -634,20 +679,29 @@ const setPrescriptionLabAmount = async (req, res) => {
       });
     }
 
-    if (order.paymentStatus === "Paid") {
-      return res.status(400).json({
+    // 10. Never allow amount changes after payment starts
+    if (
+      order.paymentStatus === "Paid" ||
+      order.razorpayOrderId ||
+      order.razorpayPaymentId ||
+      order.paymentRecordId
+    ) {
+      return res.status(409).json({
         success: false,
-        message: "Payment has already been completed.",
+        message: "Payment has already started or completed. Amount cannot be changed.",
+      });
+    }
+
+    // 11. Amount should be set only once
+    if (Number(order.totalAmount || 0) > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Final amount has already been set for this booking.",
       });
     }
 
     order.totalAmount = finalAmount;
     order.paymentStatus = "Pending";
-
-    order.razorpayOrderId = "";
-    order.razorpayPaymentId = "";
-    order.razorpaySignature = "";
-    order.paymentRecordId = "";
 
     await order.save();
 
@@ -656,6 +710,7 @@ const setPrescriptionLabAmount = async (req, res) => {
       message: "Final prescription lab amount saved successfully.",
       order,
     });
+
   } catch (error) {
     console.error("SET PRESCRIPTION LAB AMOUNT ERROR:", error);
 
@@ -666,6 +721,7 @@ const setPrescriptionLabAmount = async (req, res) => {
     });
   }
 };
+
 
 // ============================================================
 // SAMPLE RECEIVED AT LAB
