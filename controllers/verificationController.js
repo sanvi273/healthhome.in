@@ -171,20 +171,59 @@ const createVerification = async (req, res) => {
   }
 };
 
+
 // =====================================================
 // GET MY VERIFICATION
 // =====================================================
 const getMyVerification = async (req, res) => {
   try {
-    const verification = await Verification.findOne({
-      userId: req.user.id,
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    let verification = await Verification.findOne({
+      $or: [
+        { userId: user._id },
+        { verificationId: user.verificationId },
+      ],
     }).sort({ createdAt: -1 });
+
+    // Repair missing application for a pending professional.
+    if (
+      !verification &&
+      ["doctor", "laboratory", "pharmacy"].includes(user.role) &&
+      ["PENDING", "UNDER_REVIEW"].includes(user.verificationStatus)
+    ) {
+      verification = await Verification.create({
+        userId: user._id,
+        verificationId: user.verificationId,
+        role: user.role,
+        professionalName: user.name || "",
+        licenseNumber: "",
+        organizationName: "",
+        address: "",
+        documents: [],
+        notes: "",
+        status: user.verificationStatus,
+      });
+    }
 
     if (!verification) {
       return res.status(404).json({
         success: false,
         message: "No verification application found",
       });
+    }
+
+    // Repair the user reference if necessary.
+    if (!verification.userId) {
+      verification.userId = user._id;
+      await verification.save();
     }
 
     return res.status(200).json({
@@ -201,6 +240,7 @@ const getMyVerification = async (req, res) => {
     });
   }
 };
+
 
 // =====================================================
 // ADMIN - GET ALL VERIFICATIONS
@@ -233,18 +273,61 @@ const getAllVerifications = async (req, res) => {
 // =====================================================
 // ADMIN - GET PENDING VERIFICATIONS
 // =====================================================
+
+// =====================================================
+// ADMIN - GET PENDING VERIFICATIONS
+// Includes Doctor, Laboratory and Pharmacy
+// Also repairs missing verification records safely.
+// =====================================================
 const getPendingVerifications = async (req, res) => {
   try {
+    // Find all professional users who are awaiting verification.
+    const pendingUsers = await User.find({
+      role: { $in: ["doctor", "laboratory", "pharmacy"] },
+      verificationStatus: { $in: ["PENDING", "UNDER_REVIEW"] },
+    }).select("_id name email phone role verificationStatus verificationId accountStatus");
+
+    // Ensure every pending professional has a verification record.
+    for (const user of pendingUsers) {
+      let verification = await Verification.findOne({
+        $or: [
+          { userId: user._id },
+          { verificationId: user.verificationId },
+        ],
+      });
+
+      if (!verification) {
+        // Create only if no matching application exists.
+        await Verification.create({
+          userId: user._id,
+          verificationId: user.verificationId,
+          role: user.role,
+          professionalName: user.name || "",
+          licenseNumber: "",
+          organizationName: "",
+          address: "",
+          documents: [],
+          notes: "",
+          status: user.verificationStatus,
+        });
+      } else {
+        // Repair a missing user link without replacing existing documents.
+        if (!verification.userId) {
+          verification.userId = user._id;
+          await verification.save();
+        }
+      }
+    }
+
+    // Return pending and under-review applications to Admin.
     const verifications = await Verification.find({
-      status: {
-        $in: ["PENDING", "UNDER_REVIEW"],
-      },
+      status: { $in: ["PENDING", "UNDER_REVIEW"] },
     })
       .populate(
         "userId",
-        "name email phone role verificationStatus accountStatus"
+        "name email phone role verificationStatus accountStatus verificationId"
       )
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
@@ -256,11 +339,12 @@ const getPendingVerifications = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to load pending verification applications",
       error: error.message,
     });
   }
 };
+
 
 // =====================================================
 // ADMIN - GET SINGLE VERIFICATION
