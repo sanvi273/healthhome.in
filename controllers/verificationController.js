@@ -320,14 +320,20 @@ const getPendingVerifications = async (req, res) => {
     }
 
     // Return pending and under-review applications to Admin.
-    const verifications = await Verification.find({
-      status: { $in: ["PENDING", "UNDER_REVIEW"] },
-    })
-      .populate(
-        "userId",
-        "name email phone role verificationStatus accountStatus verificationId"
-      )
-      .sort({ createdAt: -1 });
+const verifications = await Verification.find({
+  status: { $in: ["PENDING", "UNDER_REVIEW"] },
+})
+  .populate({
+    path: "userId",
+    model: User,
+    select: "name email phone role verificationStatus accountStatus verificationId",
+  })
+  .sort({ createdAt: -1 });
+
+console.log(
+  "ADMIN PENDING VERIFICATIONS:",
+  JSON.stringify(verifications, null, 2)
+);
 
     return res.status(200).json({
       success: true,
