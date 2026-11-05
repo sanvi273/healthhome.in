@@ -1,8 +1,15 @@
-
 const mongoose = require("mongoose");
 
 const doctorSchema = new mongoose.Schema(
   {
+    // Optional for legacy records. New records are linked to the authenticated User.
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
     name: {
       type: String,
       required: true,
@@ -19,35 +26,38 @@ const doctorSchema = new mongoose.Schema(
     specialization: {
       type: String,
       required: true,
+      trim: true,
     },
 
     experience: {
       type: String,
       required: true,
+      trim: true,
     },
 
     fees: {
       type: String,
       required: true,
+      trim: true,
     },
 
     hospital: {
       type: String,
       required: true,
+      trim: true,
     },
 
     about: {
       type: String,
       default: "",
+      trim: true,
     },
 
-    // Doctor can turn appointment booking ON or OFF.
     isAvailable: {
       type: Boolean,
       default: true,
     },
 
-    // Regular working days.
     workingDays: {
       type: [
         {
@@ -73,7 +83,6 @@ const doctorSchema = new mongoose.Schema(
       ],
     },
 
-    // Working hours use 24-hour format: HH:mm.
     startTime: {
       type: String,
       default: "10:00",
@@ -84,7 +93,6 @@ const doctorSchema = new mongoose.Schema(
       default: "19:30",
     },
 
-    // Optional daily break.
     breakStart: {
       type: String,
       default: "13:00",
@@ -95,7 +103,6 @@ const doctorSchema = new mongoose.Schema(
       default: "14:00",
     },
 
-    // Appointment duration in minutes.
     slotDurationMinutes: {
       type: Number,
       default: 30,
@@ -103,7 +110,6 @@ const doctorSchema = new mongoose.Schema(
       max: 120,
     },
 
-    // Each doctor can choose their own daily appointment limit.
     maxAppointmentsPerDay: {
       type: Number,
       default: 10,

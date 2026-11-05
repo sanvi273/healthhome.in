@@ -1,6 +1,6 @@
-
 const mongoose = require("mongoose");
 const Doctor = require("../models/doctor");
+const User = require("../models/user");
 
 const WEEKDAYS = [
   "Monday",
@@ -19,13 +19,71 @@ const isValidTime = (value) =>
 const isValidObjectId = (id) =>
   mongoose.Types.ObjectId.isValid(id);
 
+const getAuthenticatedDoctorUser = async (req) => {
+  if (!req.user || !req.user.id) {
+    return { error: { status: 401, message: "Authentication required" } };
+  }
+
+  const user = await User.findById(req.user.id);
+
+  if (!user) {
+    return { error: { status: 401, message: "User account not found" } };
+  }
+
+  if (user.role !== "doctor") {
+    return { error: { status: 403, message: "Doctor account required" } };
+  }
+
+  return { user };
+};
+
+const requireApprovedDoctor = async (req) => {
+  const result = await getAuthenticatedDoctorUser(req);
+  if (result.error) return result;
+
+  if (result.user.verificationStatus !== "APPROVED") {
+    return {
+      error: {
+        status: 403,
+        message: "Your professional verification must be approved before using this feature.",
+        verificationStatus: result.user.verificationStatus,
+      },
+    };
+  }
+
+  return result;
+};
+
+const findOwnedDoctorProfile = async (doctorId, user) => {
+  // New records use userId. Phone is retained as a compatibility path for
+  // existing Doctor records created before userId was added.
+  return Doctor.findOne({
+    _id: doctorId,
+    $or: [
+      { userId: user._id },
+      { userId: null, phone: user.phone },
+      { userId: { $exists: false }, phone: user.phone },
+    ],
+  });
+};
+
 // ================= ADD / UPDATE DOCTOR =================
+// Profile details may be saved while verification is pending.
+// This endpoint does not grant dashboard or appointment-management access.
 
 const addDoctor = async (req, res) => {
   try {
+    const auth = await getAuthenticatedDoctorUser(req);
+    if (auth.error) {
+      return res.status(auth.error.status).json({
+        success: false,
+        message: auth.error.message,
+      });
+    }
+
+    const user = auth.user;
     const {
       name,
-      phone,
       specialization,
       experience,
       fees,
@@ -35,29 +93,44 @@ const addDoctor = async (req, res) => {
 
     if (
       !name ||
-      !phone ||
       !specialization ||
       !experience ||
       fees === undefined ||
+      fees === null ||
+      String(fees).trim() === "" ||
       !hospital
     ) {
       return res.status(400).json({
         success: false,
         message:
-          "Name, phone, specialization, experience, fees and hospital are required",
+          "Name, specialization, experience, fees and hospital are required",
       });
     }
 
-    let doctor = await Doctor.findOne({ phone });
+    if (!user.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "A phone number is missing from your user account",
+      });
+    }
 
     const profileFields = {
-      name,
-      specialization,
-      experience,
-      fees,
-      hospital,
-      about: about ?? "",
+      userId: user._id,
+      name: String(name).trim(),
+      phone: user.phone,
+      specialization: String(specialization).trim(),
+      experience: String(experience).trim(),
+      fees: String(fees).trim(),
+      hospital: String(hospital).trim(),
+      about: about == null ? "" : String(about).trim(),
     };
+
+    let doctor = await Doctor.findOne({
+      $or: [
+        { userId: user._id },
+        { phone: user.phone },
+      ],
+    });
 
     if (doctor) {
       Object.assign(doctor, profileFields);
@@ -65,22 +138,29 @@ const addDoctor = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "Doctor updated successfully",
+        message: "Doctor profile updated successfully",
         doctor,
+        verificationStatus: user.verificationStatus,
       });
     }
 
-    doctor = await Doctor.create({
-      ...profileFields,
-      phone,
-    });
+    doctor = await Doctor.create(profileFields);
 
     return res.status(201).json({
       success: true,
-      message: "Doctor added successfully",
+      message: "Doctor profile saved successfully",
       doctor,
+      verificationStatus: user.verificationStatus,
     });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "A doctor profile already exists for this phone number. Please contact support if it is not your profile.",
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: error.message,
@@ -88,11 +168,32 @@ const addDoctor = async (req, res) => {
   }
 };
 
-// ================= GET ALL DOCTORS =================
+// ================= GET APPROVED DOCTORS =================
+// Public endpoint for patients. Only users with approved verification are listed.
 
 const getDoctors = async (req, res) => {
   try {
-    const doctors = await Doctor.find();
+    const approvedUsers = await User.find({
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      accountStatus: "ACTIVE",
+    }).select("_id phone");
+
+    if (approvedUsers.length === 0) {
+      return res.status(200).json({ success: true, doctors: [] });
+    }
+
+    const approvedUserIds = approvedUsers.map((user) => user._id);
+    const approvedPhones = approvedUsers
+      .map((user) => user.phone)
+      .filter(Boolean);
+
+    const doctors = await Doctor.find({
+      $or: [
+        { userId: { $in: approvedUserIds } },
+        { phone: { $in: approvedPhones } },
+      ],
+    }).sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
@@ -106,12 +207,33 @@ const getDoctors = async (req, res) => {
   }
 };
 
-// ================= GET DOCTOR PROFILE BY PHONE =================
+// ================= GET APPROVED DOCTOR PROFILE BY PHONE =================
 
 const getDoctorProfile = async (req, res) => {
   try {
+    const phone = String(req.params.phone || "").trim();
+
+    const user = await User.findOne({
+      phone,
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      accountStatus: "ACTIVE",
+    }).select("_id");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Approved doctor profile not found",
+      });
+    }
+
     const doctor = await Doctor.findOne({
-      phone: req.params.phone,
+      phone,
+      $or: [
+        { userId: user._id },
+        { userId: null },
+        { userId: { $exists: false } },
+      ],
     });
 
     if (!doctor) {
@@ -134,9 +256,19 @@ const getDoctorProfile = async (req, res) => {
 };
 
 // ================= TURN AVAILABILITY ON / OFF =================
+// Only the owning, approved doctor can change availability.
 
 const updateDoctorAvailability = async (req, res) => {
   try {
+    const auth = await requireApprovedDoctor(req);
+    if (auth.error) {
+      return res.status(auth.error.status).json({
+        success: false,
+        message: auth.error.message,
+        verificationStatus: auth.error.verificationStatus,
+      });
+    }
+
     const { doctorId } = req.params;
     const { isAvailable } = req.body;
 
@@ -154,18 +286,17 @@ const updateDoctorAvailability = async (req, res) => {
       });
     }
 
-    const doctor = await Doctor.findByIdAndUpdate(
-      doctorId,
-      { $set: { isAvailable } },
-      { new: true, runValidators: true }
-    );
+    const doctor = await findOwnedDoctorProfile(doctorId, auth.user);
 
     if (!doctor) {
       return res.status(404).json({
         success: false,
-        message: "Doctor not found",
+        message: "Doctor profile not found for this account",
       });
     }
+
+    doctor.isAvailable = isAvailable;
+    await doctor.save();
 
     return res.status(200).json({
       success: true,
@@ -183,9 +314,19 @@ const updateDoctorAvailability = async (req, res) => {
 };
 
 // ================= UPDATE WORKING SCHEDULE =================
+// Only the owning, approved doctor can change their schedule.
 
 const updateDoctorSchedule = async (req, res) => {
   try {
+    const auth = await requireApprovedDoctor(req);
+    if (auth.error) {
+      return res.status(auth.error.status).json({
+        success: false,
+        message: auth.error.message,
+        verificationStatus: auth.error.verificationStatus,
+      });
+    }
+
     const { doctorId } = req.params;
 
     if (!isValidObjectId(doctorId)) {
@@ -231,7 +372,6 @@ const updateDoctorSchedule = async (req, res) => {
           message: "startTime must use HH:mm format, e.g. 09:00",
         });
       }
-
       updates.startTime = startTime;
     }
 
@@ -242,7 +382,6 @@ const updateDoctorSchedule = async (req, res) => {
           message: "endTime must use HH:mm format, e.g. 18:00",
         });
       }
-
       updates.endTime = endTime;
     }
 
@@ -253,7 +392,6 @@ const updateDoctorSchedule = async (req, res) => {
           message: "breakStart must use HH:mm format or null",
         });
       }
-
       updates.breakStart = breakStart ?? "";
     }
 
@@ -264,50 +402,39 @@ const updateDoctorSchedule = async (req, res) => {
           message: "breakEnd must use HH:mm format or null",
         });
       }
-
       updates.breakEnd = breakEnd ?? "";
     }
 
     if (slotDurationMinutes !== undefined) {
       const duration = Number(slotDurationMinutes);
 
-      if (
-        !Number.isInteger(duration) ||
-        duration < 10 ||
-        duration > 120
-      ) {
+      if (!Number.isInteger(duration) || duration < 10 || duration > 120) {
         return res.status(400).json({
           success: false,
           message: "slotDurationMinutes must be an integer from 10 to 120",
         });
       }
-
       updates.slotDurationMinutes = duration;
     }
 
     if (maxAppointmentsPerDay !== undefined) {
       const limit = Number(maxAppointmentsPerDay);
 
-      if (
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 100
-      ) {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
         return res.status(400).json({
           success: false,
           message: "maxAppointmentsPerDay must be from 1 to 100",
         });
       }
-
       updates.maxAppointmentsPerDay = limit;
     }
 
-    const doctor = await Doctor.findById(doctorId);
+    const doctor = await findOwnedDoctorProfile(doctorId, auth.user);
 
     if (!doctor) {
       return res.status(404).json({
         success: false,
-        message: "Doctor not found",
+        message: "Doctor profile not found for this account",
       });
     }
 
@@ -329,7 +456,6 @@ const updateDoctorSchedule = async (req, res) => {
       });
     }
 
-    // Break times must either both be empty or form a valid interval.
     if (Boolean(finalBreakStart) !== Boolean(finalBreakEnd)) {
       return res.status(400).json({
         success: false,
@@ -367,8 +493,6 @@ const updateDoctorSchedule = async (req, res) => {
     });
   }
 };
-
-// ================= EXPORT =================
 
 module.exports = {
   addDoctor,
