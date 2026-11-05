@@ -1,7 +1,7 @@
 const express = require("express");
 
 const router = express.Router();
-
+const authMiddleware = require("../middleware/authMiddleware");
 const {
   addLab,
   getLabs,
@@ -25,10 +25,9 @@ router.get(
   }
 );
 
-// ================= ADD LAB =================
-
 router.post(
   "/add",
+  authMiddleware,
   addLab
 );
 
