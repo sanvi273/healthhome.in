@@ -578,6 +578,96 @@ const markSampleCollected = async (req, res) => {
 };
 
 // ============================================================
+// SET FINAL AMOUNT FOR PRESCRIPTION LAB BOOKING
+// ============================================================
+
+const setPrescriptionLabAmount = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, labId } = req.body;
+
+    const finalAmount = Number(amount);
+
+    if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid amount greater than zero.",
+      });
+    }
+
+    if (!labId) {
+      return res.status(400).json({
+        success: false,
+        message: "Laboratory ID is required.",
+      });
+    }
+
+    const order = await LabOrder.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Lab booking not found.",
+      });
+    }
+
+    if (order.bookingType !== "PRESCRIPTION") {
+      return res.status(400).json({
+        success: false,
+        message: "This is not a prescription lab booking.",
+      });
+    }
+
+    if (String(order.labId) !== String(labId)) {
+      return res.status(403).json({
+        success: false,
+        message: "This booking does not belong to this laboratory.",
+      });
+    }
+
+    if (
+      !["Sample Collected", "Sample Received"].includes(order.status)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Sample must be collected before setting the amount.",
+      });
+    }
+
+    if (order.paymentStatus === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment has already been completed.",
+      });
+    }
+
+    order.totalAmount = finalAmount;
+    order.paymentStatus = "Pending";
+
+    order.razorpayOrderId = "";
+    order.razorpayPaymentId = "";
+    order.razorpaySignature = "";
+    order.paymentRecordId = "";
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Final prescription lab amount saved successfully.",
+      order,
+    });
+  } catch (error) {
+    console.error("SET PRESCRIPTION LAB AMOUNT ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to save prescription lab amount.",
+      error: error.message,
+    });
+  }
+};
+
+// ============================================================
 // SAMPLE RECEIVED AT LAB
 // ============================================================
 
@@ -1806,6 +1896,7 @@ module.exports = {
   assignSampleCollector,
   collectorOnTheWay,
   markSampleCollected,
+  setPrescriptionLabAmount,
   markSampleReceived,
   startTesting,
   updateLabOrderStatus,

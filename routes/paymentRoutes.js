@@ -1,29 +1,82 @@
+
 const express = require("express");
 const router = express.Router();
 
 const paymentController = require("../controllers/paymentController");
 const upload = require("../middleware/upload");
+const authMiddleware = require("../middleware/authMiddleware");
 
-// Existing Medicine/Lab payment flow
-router.post("/create-order", paymentController.createOrder);
-router.post("/verify-payment", paymentController.verifyPayment);
+// ==========================================
+// MEDICINE & LAB PAYMENT
+// ==========================================
 
-// Doctor appointment payment flow
-// Selected reports are uploaded with the pending appointment.
+// Create Razorpay order
+router.post(
+  "/create-order",
+  authMiddleware,
+  paymentController.createOrder
+);
+
+// Verify Razorpay payment
+router.post(
+  "/verify-payment",
+  authMiddleware,
+  paymentController.verifyPayment
+);
+
+// ==========================================
+// DOCTOR APPOINTMENT PAYMENT
+// ==========================================
+
+// Create doctor appointment payment order
+// Authentication runs before report uploads.
 router.post(
   "/create-doctor-order",
+  authMiddleware,
   upload.array("reports"),
   paymentController.createDoctorOrder
 );
 
-router.post("/verify-doctor-payment", paymentController.verifyDoctorPayment);
-router.post("/cancel-doctor-order", paymentController.cancelDoctorOrder);
+// Verify doctor appointment payment
+router.post(
+  "/verify-doctor-payment",
+  authMiddleware,
+  paymentController.verifyDoctorPayment
+);
 
-// Razorpay webhook
-router.post("/webhook", paymentController.webhook);
+// Cancel doctor appointment payment
+router.post(
+  "/cancel-doctor-order",
+  authMiddleware,
+  paymentController.cancelDoctorOrder
+);
 
-// Old QR compatibility endpoints
-router.get("/qr-status/:paymentRecordId", paymentController.getQrPaymentStatus);
-router.post("/close-qr", paymentController.closeQr);
+// ==========================================
+// RAZORPAY WEBHOOK
+// ==========================================
+
+// IMPORTANT:
+// Do not add JWT authentication here.
+// Razorpay authenticates webhooks using webhook signature.
+router.post(
+  "/webhook",
+  paymentController.webhook
+);
+
+// ==========================================
+// LEGACY QR COMPATIBILITY ROUTES
+// ==========================================
+
+router.get(
+  "/qr-status/:paymentRecordId",
+  authMiddleware,
+  paymentController.getQrPaymentStatus
+);
+
+router.post(
+  "/close-qr",
+  authMiddleware,
+  paymentController.closeQr
+);
 
 module.exports = router;

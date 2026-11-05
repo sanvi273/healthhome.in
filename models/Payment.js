@@ -1,32 +1,24 @@
+
 const mongoose = require("mongoose");
 
 const paymentSchema = new mongoose.Schema(
   {
-    // ============================================================
     // HEALTHHOME ORDER
-    // ============================================================
-
     orderReferenceId: {
       type: String,
       default: "",
       index: true,
     },
 
-    // ============================================================
     // RAZORPAY PAYMENT
-    // ============================================================
-
     paymentId: {
       type: String,
-      default: "",
-      unique: true,
-      sparse: true,
+      default: undefined,
     },
 
     orderId: {
       type: String,
-      default: "",
-      index: true,
+      default: undefined,
     },
 
     signature: {
@@ -34,37 +26,28 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ============================================================
-    // RAZORPAY QR
-    // ============================================================
-
-    // Razorpay QR Code ID
+    // RAZORPAY QR - LEGACY COMPATIBILITY
     razorpayQrId: {
       type: String,
       default: "",
       index: true,
     },
 
-    // QR image URL returned by Razorpay
     razorpayQrImageUrl: {
       type: String,
       default: "",
     },
 
-    // Razorpay QR status
-    // Example: active / closed / expired
     qrStatus: {
       type: String,
       default: "",
     },
 
-    // ============================================================
     // USER
-    // ============================================================
-
     userId: {
       type: String,
       required: true,
+      index: true,
     },
 
     userName: {
@@ -77,31 +60,20 @@ const paymentSchema = new mongoose.Schema(
       required: true,
     },
 
-    // ============================================================
     // SERVICE
-    // ============================================================
-
     serviceType: {
       type: String,
-      enum: [
-        "Doctor",
-        "Medicine",
-        "Lab",
-      ],
+      enum: ["Doctor", "Medicine", "Lab"],
       required: true,
     },
 
     serviceId: {
       type: String,
       default: "",
+      index: true,
     },
 
-    // ============================================================
-    // PAYMENT AMOUNT
-    // ============================================================
-
-    // Amount is stored in INR rupees
-    // Example: 500 = ₹500
+    // PAYMENT AMOUNT - INR
     amount: {
       type: Number,
       required: true,
@@ -113,17 +85,12 @@ const paymentSchema = new mongoose.Schema(
       default: "INR",
     },
 
-    // ============================================================
     // PAYMENT METHOD
-    // ============================================================
-
     paymentMethod: {
       type: String,
       enum: [
         "ONLINE",
         "COD",
-
-        // Existing values kept for old records
         "UPI",
         "Card",
         "Net Banking",
@@ -134,10 +101,7 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ============================================================
     // PAYMENT STATUS
-    // ============================================================
-
     status: {
       type: String,
       enum: [
@@ -146,28 +110,19 @@ const paymentSchema = new mongoose.Schema(
         "Failed",
         "Collected",
         "Refunded",
+        "Cancelled",
       ],
       default: "Pending",
+      index: true,
     },
 
-    // ============================================================
-    // RAZORPAY PAYMENT STATUS
-    // ============================================================
-
-    // Example:
-    // created
-    // authorized
-    // captured
-    // failed
+    // RAZORPAY STATUS
     razorpayStatus: {
       type: String,
       default: "",
     },
 
-    // ============================================================
     // SETTLEMENT
-    // ============================================================
-
     settlementStatus: {
       type: String,
       enum: [
@@ -184,11 +139,7 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ============================================================
     // PROVIDER
-    // Doctor / Laboratory / Pharmacy
-    // ============================================================
-
     providerId: {
       type: String,
       default: "",
@@ -206,10 +157,7 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ============================================================
     // HEALTHHOME COMMISSION
-    // ============================================================
-
     platformFee: {
       type: Number,
       default: 0,
@@ -222,10 +170,7 @@ const paymentSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // ============================================================
     // COD COLLECTION
-    // ============================================================
-
     cashCollected: {
       type: Boolean,
       default: false,
@@ -236,10 +181,7 @@ const paymentSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ============================================================
     // REFUND
-    // ============================================================
-
     refundId: {
       type: String,
       default: "",
@@ -261,11 +203,33 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-// ============================================================
-// MODEL
-// ============================================================
-
-module.exports = mongoose.model(
-  "Payment",
-  paymentSchema
+// Only non-empty Razorpay payment IDs must be unique.
+paymentSchema.index(
+  { paymentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      paymentId: { $type: "string", $gt: "" },
+    },
+  }
 );
+
+// Only non-empty Razorpay order IDs must be unique.
+paymentSchema.index(
+  { orderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      orderId: { $type: "string", $gt: "" },
+    },
+  }
+);
+
+// Helpful lookup for service payment history.
+paymentSchema.index({
+  serviceType: 1,
+  serviceId: 1,
+  userId: 1,
+});
+
+module.exports = mongoose.model("Payment", paymentSchema);

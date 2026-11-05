@@ -12,6 +12,7 @@ const {
   assignSampleCollector,
   collectorOnTheWay,
   markSampleCollected,
+  setPrescriptionLabAmount,
   markSampleReceived,
   startTesting,
   updateLabOrderStatus,
@@ -163,11 +164,24 @@ router.put(
 
 router.put("/report/:id", uploadReport);
 
+
+// ==========================================================
+// SET PRESCRIPTION LAB TEST FINAL AMOUNT
+// PUT /api/lab-orders/prescription-payment/amount/:id
+// ==========================================================
+
+router.put(
+  "/prescription-payment/amount/:id",
+  setPrescriptionLabAmount
+);
+
 // ==========================================================
 // GET SINGLE BOOKING
 // Keep generic route last.
 // ==========================================================
 
 router.get("/:id", getLabOrderById);
+
+
 
 module.exports = router;
