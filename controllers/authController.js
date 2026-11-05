@@ -373,13 +373,11 @@ if (
       status: "PENDING",
     });
 
-    console.log(
-      `Verification created for ${user.name} (${normalizedRole})`
-    );
-  } catch (verificationError) {
-    await User.findByIdAndDelete(user._id);
-    throw verificationError;
-  }
+   console.log(
+  "VERIFICATION CREATED SUCCESSFULLY:",
+  user.verificationId,
+  normalizedRole
+);
 }
 
         // ====================================================
