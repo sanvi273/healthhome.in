@@ -1147,83 +1147,51 @@ if (!patientName || !patientPhone) {
 
 
 
-    // --------------------------------------------------------
+ 
+    // --------------------------------------------------------
+    // CHECK ACTIVE SLOT - DEBUG VERSION
+    // --------------------------------------------------------
 
-    // CHECK ACTIVE SLOT
+    console.log("\n========== DOCTOR SLOT DEBUG ==========");
+    console.log("Database:", mongoose.connection.name);
+    console.log("Collection:", Appointment.collection.name);
+    console.log("Doctor ID:", String(doctorId));
+    console.log("Date:", String(appointmentDate));
+    console.log("Time:", String(appointmentTime));
 
-    // --------------------------------------------------------
+    const allAppointments = await Appointment.find({
+      doctorId: String(doctorId),
+      appointmentDate: String(appointmentDate),
+      appointmentTime: String(appointmentTime),
+    }).lean();
 
-console.log("===== DOCTOR SLOT DEBUG =====");
-console.log("Doctor ID:", doctorId);
-console.log("Appointment Date:", appointmentDate);
-console.log("Appointment Time:", appointmentTime);
-console.log("MongoDB Database:", mongoose.connection.name);
+    console.log(
+      "ALL MATCHING APPOINTMENTS:",
+      JSON.stringify(allAppointments, null, 2)
+    );
 
-const allMatchingSlots = await Appointment.find({
-  doctorId: String(doctorId),
-  appointmentDate: String(appointmentDate),
-  appointmentTime: String(appointmentTime),
-  status: { $in: ["Pending", "Upcoming", "Accepted"] },
-});
+    const activeSlot = await Appointment.findOne({
+      doctorId: String(doctorId),
+      appointmentDate: String(appointmentDate),
+      appointmentTime: String(appointmentTime),
+      status: { $in: ["Pending", "Upcoming", "Accepted"] },
+    }).lean();
 
-console.log("Matching appointments:", allMatchingSlots);
-console.log("=============================");
+    console.log(
+      "ACTIVE SLOT:",
+      JSON.stringify(activeSlot, null, 2)
+    );
 
+    console.log("========================================");
 
-console.log("\n========== SLOT DEBUG ==========");
-console.log("Database:", Appointment.db.name);
-console.log("Collection:", Appointment.collection.name);
-console.log("Doctor ID:", String(doctorId));
-console.log("Date:", String(appointmentDate));
-console.log("Time:", String(appointmentTime));
+    if (activeSlot) {
+      return res.status(409).json({
+        success: false,
+        source: "ACTIVE_SLOT_CHECK",
+        message: "This appointment slot is already booked.",
+      });
+    }
 
-const allAppointments = await Appointment.find({
-  doctorId: String(doctorId),
-  appointmentDate: String(appointmentDate),
-  appointmentTime: String(appointmentTime),
-});
-
-console.log(
-  "ALL MATCHING APPOINTMENTS:",
-  JSON.stringify(allAppointments, null, 2)
-);
-
-const activeSlot = await Appointment.findOne({
-  doctorId: String(doctorId),
-  appointmentDate: String(appointmentDate),
-  appointmentTime: String(appointmentTime),
-  status: { $in: ["Pending", "Upcoming", "Accepted"] },
-});
-
-console.log(
-  "ACTIVE SLOT:",
-  JSON.stringify(activeSlot, null, 2)
-);
-console.log("================================\n");
-
-if (activeSlot) {
-  return res.status(409).json({
-    success: false,
-    message: "This appointment slot is already booked.",
-  });
-}
-
-
-
-
-    if (activeSlot) {
-
-      return res.status(409).json({
-
-        success: false,
-
-        message:
-
-          "This appointment slot is already booked.",
-
-      });
-
-    }
 
 
 
@@ -1385,29 +1353,29 @@ if (activeSlot) {
 
 
 
-    } catch (error) {
+   
+    } catch (error) {
+      console.error("APPOINTMENT CREATE ERROR:", {
+        message: error.message,
+        code: error.code,
+        keyPattern: error.keyPattern,
+        keyValue: error.keyValue,
+        index: error.index,
+      });
 
+      if (error?.code === 11000) {
+        return res.status(409).json({
+          success: false,
+          source: "MONGODB_DUPLICATE_INDEX",
+          message: "MongoDB rejected this appointment because of a unique index conflict.",
+          keyPattern: error.keyPattern || {},
+          keyValue: error.keyValue || {},
+        });
+      }
 
+      throw error;
+    }
 
-      if (error?.code === 11000) {
-
-        return res.status(409).json({
-
-          success: false,
-
-          message:
-
-            "This appointment slot is already booked.",
-
-        });
-
-      }
-
-
-
-      throw error;
-
-    }
 
 
 
