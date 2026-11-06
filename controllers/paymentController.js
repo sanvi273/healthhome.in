@@ -1154,7 +1154,21 @@ if (!patientName || !patientPhone) {
 
     // --------------------------------------------------------
 
+console.log("===== DOCTOR SLOT DEBUG =====");
+console.log("Doctor ID:", doctorId);
+console.log("Appointment Date:", appointmentDate);
+console.log("Appointment Time:", appointmentTime);
+console.log("MongoDB Database:", mongoose.connection.name);
 
+const allMatchingSlots = await Appointment.find({
+  doctorId: String(doctorId),
+  appointmentDate: String(appointmentDate),
+  appointmentTime: String(appointmentTime),
+  status: { $in: ["Pending", "Upcoming", "Accepted"] },
+});
+
+console.log("Matching appointments:", allMatchingSlots);
+console.log("=============================");
 
     const activeSlot = await Appointment.findOne({
 
