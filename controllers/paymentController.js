@@ -994,6 +994,9 @@ if (!authenticatedUser) {
   });
 }
 
+// Use the authenticated patient's actual MongoDB ID.
+const userId = String(authenticatedUser._id);
+
 if (
   authenticatedUser.role !== "patient" ||
   authenticatedUser.accountStatus !== "ACTIVE"
