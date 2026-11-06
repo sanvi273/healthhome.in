@@ -957,31 +957,6 @@ const Appointment = require("../models/Appointment");
 
 // ------------------------------------------------------------
 
-console.log("\n========== SLOT DEBUG ==========");
-console.log("Database:", Appointment.db.name);
-console.log("Collection:", Appointment.collection.name);
-console.log("Doctor ID:", String(doctorId));
-console.log("Date:", String(appointmentDate));
-console.log("Time:", String(appointmentTime));
-
-const allAppointments = await Appointment.find({
-  doctorId: String(doctorId),
-  appointmentDate: String(appointmentDate),
-  appointmentTime: String(appointmentTime),
-});
-
-console.log("ALL MATCHING APPOINTMENTS:");
-console.log(JSON.stringify(allAppointments, null, 2));
-
-const activeSlot = await Appointment.findOne({
-  doctorId: String(doctorId),
-  appointmentDate: String(appointmentDate),
-  appointmentTime: String(appointmentTime),
-  status: { $in: ["Pending", "Upcoming", "Accepted"] },
-});
-
-console.log("ACTIVE SLOT:", JSON.stringify(activeSlot, null, 2));
-console.log("================================\n");
 
 exports.createDoctorOrder = async (req, res) => {
 
@@ -1194,39 +1169,45 @@ const allMatchingSlots = await Appointment.find({
 console.log("Matching appointments:", allMatchingSlots);
 console.log("=============================");
 
-    const activeSlot = await Appointment.findOne({
 
-      doctorId: String(doctorId),
+console.log("\n========== SLOT DEBUG ==========");
+console.log("Database:", Appointment.db.name);
+console.log("Collection:", Appointment.collection.name);
+console.log("Doctor ID:", String(doctorId));
+console.log("Date:", String(appointmentDate));
+console.log("Time:", String(appointmentTime));
 
+const allAppointments = await Appointment.find({
+  doctorId: String(doctorId),
+  appointmentDate: String(appointmentDate),
+  appointmentTime: String(appointmentTime),
+});
 
+console.log(
+  "ALL MATCHING APPOINTMENTS:",
+  JSON.stringify(allAppointments, null, 2)
+);
 
-      appointmentDate:
+const activeSlot = await Appointment.findOne({
+  doctorId: String(doctorId),
+  appointmentDate: String(appointmentDate),
+  appointmentTime: String(appointmentTime),
+  status: { $in: ["Pending", "Upcoming", "Accepted"] },
+});
 
-        String(appointmentDate),
+console.log(
+  "ACTIVE SLOT:",
+  JSON.stringify(activeSlot, null, 2)
+);
+console.log("================================\n");
 
+if (activeSlot) {
+  return res.status(409).json({
+    success: false,
+    message: "This appointment slot is already booked.",
+  });
+}
 
-
-      appointmentTime:
-
-        String(appointmentTime),
-
-
-
-      status: {
-
-        $in: [
-
-          "Pending",
-
-          "Upcoming",
-
-          "Accepted",
-
-        ],
-
-      },
-
-    });
 
 
 
