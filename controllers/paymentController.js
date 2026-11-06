@@ -1226,7 +1226,7 @@ if (!patientName || !patientPhone) {
 
       appointment = await Appointment.create({
 
-
+ patientId: userId,
 
         patientName:
 
