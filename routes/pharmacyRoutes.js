@@ -111,12 +111,13 @@ router.delete(
   }
 );
 
+
 // ============================================================
 // GET PHARMACY PROFILE
 // ============================================================
 
 router.get(
-  "/:phone",
+  "/profile/:phone",
   (req, res) => {
     return pharmacyController.getPharmacyProfile(
       req,
@@ -124,6 +125,7 @@ router.get(
     );
   }
 );
+
 
 // ============================================================
 // EXPORT ROUTER
