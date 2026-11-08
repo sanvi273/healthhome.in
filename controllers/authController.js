@@ -47,7 +47,13 @@ const generateVerificationId = async (role) => {
                 },
             },
         }],
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        {
+            new: true,
+            upsert: true,
+            setDefaultsOnInsert: true,
+            // Mongoose 9 requires this opt-in for aggregation-pipeline updates.
+            updatePipeline: true,
+        }
     );
 
     const nextNumber = String(counter.value).padStart(6, "0");
