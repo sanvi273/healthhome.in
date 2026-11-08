@@ -16,7 +16,7 @@ const {
 
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
-const upload = require("../middleware/upload");
+const verificationDocumentUpload = require("../middleware/verificationDocumentUpload");
 
 // =====================================================
 // PROFESSIONAL USER ROUTES
@@ -32,7 +32,7 @@ router.post(
 router.post(
   "/documents",
   authMiddleware,
-  upload.single("document"),
+  verificationDocumentUpload,
   uploadVerificationDocument
 );
 

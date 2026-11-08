@@ -102,6 +102,30 @@ const verificationSchema = new mongoose.Schema(
           trim: true,
         },
 
+        publicId: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        fileName: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        mimeType: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        contentHash: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
         uploadedAt: {
           type: Date,
           default: Date.now,

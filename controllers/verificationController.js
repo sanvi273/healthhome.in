@@ -2,6 +2,35 @@
 const User = require("../models/user");
 const Verification = require("../models/verification");
 const uploadToCloudinary = require("../utils/cloudinaryUpload");
+const cloudinary = require("../config/cloudinary");
+const crypto = require("crypto");
+
+const mergeDocuments = (existing, incoming) => {
+  const merged = (existing || []).map((document) =>
+    typeof document?.toObject === "function" ? document.toObject() : document
+  );
+
+  for (const document of incoming || []) {
+    const normalized = {
+      type: String(document?.type || "Verification document").trim(),
+      url: String(document?.url || "").trim(),
+      publicId: String(document?.publicId || "").trim(),
+      fileName: String(document?.fileName || "").trim(),
+      mimeType: String(document?.mimeType || "").trim(),
+      contentHash: String(document?.contentHash || "").trim(),
+      uploadedAt: document?.uploadedAt || new Date(),
+    };
+    if (!normalized.url) continue;
+
+    const duplicate = merged.some((saved) =>
+      (normalized.contentHash && saved.contentHash === normalized.contentHash) ||
+      saved.url === normalized.url
+    );
+    if (!duplicate) merged.push(normalized);
+  }
+
+  return merged;
+};
 
 // Save review state on both documents, restoring the original values if
 // either write fails. This also works on Mongo deployments without sessions.
@@ -149,7 +178,10 @@ const createVerification = async (req, res) => {
         submittedAddress || verification.address || "";
 
       if (submittedDocuments.length > 0) {
-        verification.documents = submittedDocuments;
+        verification.documents = mergeDocuments(
+          verification.documents,
+          submittedDocuments
+        );
       }
 
       verification.notes = submittedNotes || verification.notes || "";
@@ -163,7 +195,10 @@ const createVerification = async (req, res) => {
       verification.registrationNumber = registrationNumber || "";
       verification.organizationName = submittedOrganization;
       verification.address = submittedAddress;
-      verification.documents = submittedDocuments;
+      verification.documents = mergeDocuments(
+        verification.documents,
+        submittedDocuments
+      );
       verification.notes = submittedNotes;
       verification.status = "PENDING";
 
@@ -210,8 +245,10 @@ const createVerification = async (req, res) => {
   }
 };
 
-// Upload a verification document to the existing private app storage service.
+// Upload and attach a verification document to the applicant's existing record.
 const uploadVerificationDocument = async (req, res) => {
+  let uploaded;
+  let documentSaved = false;
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -220,21 +257,9 @@ const uploadVerificationDocument = async (req, res) => {
       });
     }
 
-    if (req.file.size > 10 * 1024 * 1024) {
-      return res.status(413).json({
-        success: false,
-        message: "Document must be 10 MB or smaller",
-      });
-    }
-
-    if (!["application/pdf", "image/jpeg", "image/png"].includes(req.file.mimetype)) {
-      return res.status(415).json({
-        success: false,
-        message: "Upload a PDF, JPG, or PNG document",
-      });
-    }
-
-    const user = await User.findById(req.user.id).select("role verificationStatus");
+    const user = await User.findById(req.user.id).select(
+      "name role verificationStatus verificationId addresses"
+    );
     if (!user || !["doctor", "laboratory", "pharmacy"].includes(user.role)) {
       return res.status(403).json({
         success: false,
@@ -254,20 +279,132 @@ const uploadVerificationDocument = async (req, res) => {
       });
     }
 
-    const uploaded = await uploadToCloudinary(req.file, "verifications");
+    const cloudinaryConfig = cloudinary.config();
+    if (
+      !cloudinaryConfig.cloud_name ||
+      !cloudinaryConfig.api_key ||
+      !cloudinaryConfig.api_secret
+    ) {
+      return res.status(503).json({
+        success: false,
+        message: "Document storage is not configured on the backend",
+      });
+    }
+
+    let verification = await Verification.findOne({ userId: user._id });
+    if (!verification) {
+      if (!user.verificationId) {
+        return res.status(409).json({
+          success: false,
+          message: "Your verification application is missing its ID. Contact support.",
+        });
+      }
+
+      verification = await Verification.findOneAndUpdate(
+        { verificationId: user.verificationId },
+        {
+          $setOnInsert: {
+            userId: user._id,
+            verificationId: user.verificationId,
+            role: user.role,
+            professionalName: user.name,
+            address: user.addresses?.[0]?.fullAddress || "",
+            status: user.verificationStatus || "PENDING",
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    // Older applications may be linked only by their internal verification ID.
+    // Repair that legacy link before the ownership check; never relink another user.
+    if (!verification.userId && verification.verificationId === user.verificationId) {
+      verification.userId = user._id;
+      await verification.save();
+    }
+
+    if (String(verification.userId) !== String(user._id)) {
+      return res.status(409).json({
+        success: false,
+        message: "Verification application ownership could not be confirmed",
+      });
+    }
+
+    if (verification.status === "APPROVED") {
+      return res.status(409).json({
+        success: false,
+        message: "Your verification is already approved",
+      });
+    }
+    if (verification.status === "UNDER_REVIEW") {
+      return res.status(409).json({
+        success: false,
+        message: "Your application is currently under review",
+      });
+    }
+
+    const documentType = String(req.body?.type || "Verification document").trim();
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(req.file.buffer)
+      .digest("hex");
+    const existingDocument = verification.documents.find(
+      (document) =>
+        document.contentHash === contentHash && document.type === documentType
+    );
+    if (existingDocument) {
+      return res.status(200).json({
+        success: true,
+        message: "This document is already attached to your application",
+        duplicate: true,
+        document: existingDocument,
+        verificationId: verification.verificationId,
+      });
+    }
+
+    uploaded = await uploadToCloudinary(req.file, "verifications");
+    if (!uploaded?.secure_url || !uploaded?.public_id) {
+      throw new Error("Document storage did not return a usable file URL");
+    }
+    const document = {
+      type: documentType,
+      url: uploaded.secure_url,
+      publicId: uploaded.public_id,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      contentHash,
+      uploadedAt: new Date(),
+    };
+    verification.documents.push(document);
+    await verification.save();
+    documentSaved = true;
+
     return res.status(201).json({
       success: true,
-      document: {
-        type: String(req.body?.type || req.file.originalname).trim(),
-        url: uploaded.secure_url,
-        uploadedAt: new Date(),
-      },
+      message: "Verification document uploaded successfully",
+      document: verification.documents[verification.documents.length - 1],
+      verificationId: verification.verificationId,
     });
   } catch (error) {
     console.error("VERIFICATION DOCUMENT UPLOAD ERROR:", error);
+    if (uploaded?.public_id && !documentSaved) {
+      await cloudinary.uploader
+        .destroy(uploaded.public_id, {
+          resource_type: uploaded.resource_type || "image",
+        })
+        .catch((cleanupError) =>
+          console.error("CLOUDINARY DOCUMENT CLEANUP ERROR:", cleanupError)
+        );
+    }
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "A verification application already exists for this account",
+      });
+    }
     return res.status(500).json({
       success: false,
-      message: "Unable to upload verification document",
+      message: "Unable to upload and save verification document",
     });
   }
 };
