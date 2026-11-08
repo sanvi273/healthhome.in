@@ -4,6 +4,7 @@ const router = express.Router();
 
 const {
   createVerification,
+  uploadVerificationDocument,
   getMyVerification,
   getAllVerifications,
   getPendingVerifications,
@@ -15,6 +16,7 @@ const {
 
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
+const upload = require("../middleware/upload");
 
 // =====================================================
 // PROFESSIONAL USER ROUTES
@@ -25,6 +27,13 @@ router.post(
   "/submit",
   authMiddleware,
   createVerification
+);
+
+router.post(
+  "/documents",
+  authMiddleware,
+  upload.single("document"),
+  uploadVerificationDocument
 );
 
 // Get my verification application

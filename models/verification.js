@@ -52,6 +52,12 @@ const verificationSchema = new mongoose.Schema(
       trim: true,
     },
 
+    registrationNumber: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     organizationName: {
       type: String,
       default: "",

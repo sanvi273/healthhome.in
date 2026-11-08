@@ -1,6 +1,48 @@
 
 const User = require("../models/user");
 const Verification = require("../models/verification");
+const uploadToCloudinary = require("../utils/cloudinaryUpload");
+
+// Save review state on both documents, restoring the original values if
+// either write fails. This also works on Mongo deployments without sessions.
+const saveReviewPair = async (verification, user, update) => {
+  const verificationFields = [
+    "status", "reviewedBy", "reviewedAt", "approvedBy", "approvedAt",
+    "rejectionReason",
+  ];
+  const userFields = [
+    "verificationStatus", "verificationApprovedAt",
+    "verificationApprovedBy", "accountStatus",
+  ];
+  const previousVerification = Object.fromEntries(
+    verificationFields.map((field) => [field, verification.get(field)])
+  );
+  const previousUser = Object.fromEntries(
+    userFields.map((field) => [field, user.get(field)])
+  );
+
+  update();
+  try {
+    await verification.save();
+    await user.save();
+  } catch (error) {
+    for (const [field, value] of Object.entries(previousVerification)) {
+      verification.set(field, value);
+    }
+    for (const [field, value] of Object.entries(previousUser)) {
+      user.set(field, value);
+    }
+    await Promise.all([
+      verification.save().catch((rollbackError) =>
+        console.error("VERIFICATION REVIEW ROLLBACK ERROR:", rollbackError)
+      ),
+      user.save().catch((rollbackError) =>
+        console.error("USER REVIEW ROLLBACK ERROR:", rollbackError)
+      ),
+    ]);
+    throw error;
+  }
+};
 
 // =====================================================
 // CREATE / UPDATE VERIFICATION APPLICATION
@@ -70,14 +112,7 @@ const createVerification = async (req, res) => {
     const submittedOrganization =
       organizationName || businessName || "";
 
-    const submittedNotes = [
-      notes || "",
-      registrationNumber
-        ? `Registration Number: ${registrationNumber}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const submittedNotes = notes || "";
 
     const submittedAddress =
       address ||
@@ -104,6 +139,8 @@ const createVerification = async (req, res) => {
 
       verification.licenseNumber =
         licenseNumber || verification.licenseNumber || "";
+      verification.registrationNumber =
+        registrationNumber || verification.registrationNumber || "";
 
       verification.organizationName =
         submittedOrganization || verification.organizationName || "";
@@ -123,6 +160,7 @@ const createVerification = async (req, res) => {
         professionalName || user.name;
 
       verification.licenseNumber = licenseNumber || "";
+      verification.registrationNumber = registrationNumber || "";
       verification.organizationName = submittedOrganization;
       verification.address = submittedAddress;
       verification.documents = submittedDocuments;
@@ -144,6 +182,7 @@ const createVerification = async (req, res) => {
         role: user.role,
         professionalName: professionalName || user.name,
         licenseNumber: licenseNumber || "",
+        registrationNumber: registrationNumber || "",
         organizationName: submittedOrganization,
         address: submittedAddress,
         documents: submittedDocuments,
@@ -167,6 +206,68 @@ const createVerification = async (req, res) => {
       success: false,
       message: "Server error",
       error: error.message,
+    });
+  }
+};
+
+// Upload a verification document to the existing private app storage service.
+const uploadVerificationDocument = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose a document to upload",
+      });
+    }
+
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(413).json({
+        success: false,
+        message: "Document must be 10 MB or smaller",
+      });
+    }
+
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(req.file.mimetype)) {
+      return res.status(415).json({
+        success: false,
+        message: "Upload a PDF, JPG, or PNG document",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select("role verificationStatus");
+    if (!user || !["doctor", "laboratory", "pharmacy"].includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Professional account required",
+      });
+    }
+    if (user.verificationStatus === "APPROVED") {
+      return res.status(409).json({
+        success: false,
+        message: "Your verification is already approved",
+      });
+    }
+    if (user.verificationStatus === "UNDER_REVIEW") {
+      return res.status(409).json({
+        success: false,
+        message: "Your application is currently under review",
+      });
+    }
+
+    const uploaded = await uploadToCloudinary(req.file, "verifications");
+    return res.status(201).json({
+      success: true,
+      document: {
+        type: String(req.body?.type || req.file.originalname).trim(),
+        url: uploaded.secure_url,
+        uploadedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error("VERIFICATION DOCUMENT UPLOAD ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to upload verification document",
     });
   }
 };
@@ -415,14 +516,12 @@ const markUnderReview = async (req, res) => {
       });
     }
 
-    verification.status = "UNDER_REVIEW";
-    verification.reviewedBy = req.user.id;
-    verification.reviewedAt = new Date();
-
-    user.verificationStatus = "UNDER_REVIEW";
-
-    await verification.save();
-    await user.save();
+    await saveReviewPair(verification, user, () => {
+      verification.status = "UNDER_REVIEW";
+      verification.reviewedBy = req.user.id;
+      verification.reviewedAt = new Date();
+      user.verificationStatus = "UNDER_REVIEW";
+    });
 
     return res.status(200).json({
       success: true,
@@ -472,19 +571,17 @@ const approveVerification = async (req, res) => {
 
     const now = new Date();
 
-    verification.status = "APPROVED";
-    verification.reviewedAt = now;
-    verification.approvedAt = now;
-    verification.reviewedBy = req.user.id;
-    verification.approvedBy = req.user.id;
-
-    user.verificationStatus = "APPROVED";
-    user.verificationApprovedAt = now;
-    user.verificationApprovedBy = req.user.id;
-    user.accountStatus = "ACTIVE";
-
-    await verification.save();
-    await user.save();
+    await saveReviewPair(verification, user, () => {
+      verification.status = "APPROVED";
+      verification.reviewedAt = now;
+      verification.approvedAt = now;
+      verification.reviewedBy = req.user.id;
+      verification.approvedBy = req.user.id;
+      user.verificationStatus = "APPROVED";
+      user.verificationApprovedAt = now;
+      user.verificationApprovedBy = req.user.id;
+      user.accountStatus = "ACTIVE";
+    });
 
     return res.status(200).json({
       success: true,
@@ -551,15 +648,13 @@ const rejectVerification = async (req, res) => {
       });
     }
 
-    verification.status = "REJECTED";
-    verification.rejectionReason = reason;
-    verification.reviewedAt = new Date();
-    verification.reviewedBy = req.user.id;
-
-    user.verificationStatus = "REJECTED";
-
-    await verification.save();
-    await user.save();
+    await saveReviewPair(verification, user, () => {
+      verification.status = "REJECTED";
+      verification.rejectionReason = reason;
+      verification.reviewedAt = new Date();
+      verification.reviewedBy = req.user.id;
+      user.verificationStatus = "REJECTED";
+    });
 
     return res.status(200).json({
       success: true,
@@ -585,6 +680,7 @@ const rejectVerification = async (req, res) => {
 
 module.exports = {
   createVerification,
+  uploadVerificationDocument,
   getMyVerification,
   getAllVerifications,
   getPendingVerifications,

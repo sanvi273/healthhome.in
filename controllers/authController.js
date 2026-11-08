@@ -1,6 +1,7 @@
 
 const User = require("../models/user");
 const Verification = require("../models/verification");
+const VerificationCounter = require("../models/verificationCounter");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
@@ -21,16 +22,37 @@ const generateVerificationId = async (role) => {
 
     const year = new Date().getFullYear();
 
-    const count = await User.countDocuments({
-        role: role,
-        verificationId: {
-            $regex: `^HH-${prefix}-${year}-`,
-        },
-    });
+    const idPrefix = `HH-${prefix}-${year}-`;
+    const pattern = `^${idPrefix}`;
+    const latest = await Verification.findOne({
+        verificationId: { $regex: pattern },
+    }).sort({ verificationId: -1 }).select("verificationId").lean();
+    const latestUser = await User.findOne({
+        verificationId: { $regex: pattern },
+    }).sort({ verificationId: -1 }).select("verificationId").lean();
+    const existingSequence = Math.max(
+        latest ? Number(latest.verificationId.slice(idPrefix.length)) || 0 : 0,
+        latestUser ? Number(latestUser.verificationId.slice(idPrefix.length)) || 0 : 0
+    );
+    const sequenceKey = `${role}-${year}`;
+    const counter = await VerificationCounter.findOneAndUpdate(
+        { _id: sequenceKey },
+        [{
+            $set: {
+                value: {
+                    $add: [
+                        { $max: [{ $ifNull: ["$value", 0] }, existingSequence] },
+                        1,
+                    ],
+                },
+            },
+        }],
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
 
-    const nextNumber = String(count + 1).padStart(6, "0");
+    const nextNumber = String(counter.value).padStart(6, "0");
 
-    return `HH-${prefix}-${year}-${nextNumber}`;
+    return `${idPrefix}${nextNumber}`;
 };
 
 // ============================================================
