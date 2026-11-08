@@ -1,32 +1,76 @@
-
 const mongoose = require("mongoose");
 
 const paymentSchema = new mongoose.Schema(
   {
-    // HEALTHHOME ORDER
+    // HEALTHHOME / SERVICE REFERENCES
     orderReferenceId: {
       type: String,
       default: "",
       index: true,
+      trim: true,
     },
 
-    // RAZORPAY PAYMENT
+    appointmentId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
+    },
+
+    labOrderId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
+    },
+
+    pharmacyOrderId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
+    },
+
+    // RAZORPAY IDENTIFIERS
     paymentId: {
       type: String,
       default: undefined,
+      trim: true,
+    },
+
+    razorpayPaymentId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
     },
 
     orderId: {
       type: String,
       default: undefined,
+      trim: true,
+    },
+
+    razorpayOrderId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
     },
 
     signature: {
       type: String,
       default: "",
+      trim: true,
     },
 
-    // RAZORPAY QR - LEGACY COMPATIBILITY
+    razorpaySignature: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    // LEGACY QR COMPATIBILITY
     razorpayQrId: {
       type: String,
       default: "",
@@ -43,24 +87,27 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // USER
+    // USER INFORMATION
     userId: {
       type: String,
       required: true,
       index: true,
+      trim: true,
     },
 
     userName: {
       type: String,
       required: true,
+      trim: true,
     },
 
     userPhone: {
       type: String,
       required: true,
+      trim: true,
     },
 
-    // SERVICE
+    // SERVICE DETAILS
     serviceType: {
       type: String,
       enum: ["Doctor", "Medicine", "Lab"],
@@ -71,9 +118,10 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       default: "",
       index: true,
+      trim: true,
     },
 
-    // PAYMENT AMOUNT - INR
+    // AMOUNT & CURRENCY
     amount: {
       type: Number,
       required: true,
@@ -83,22 +131,14 @@ const paymentSchema = new mongoose.Schema(
     currency: {
       type: String,
       default: "INR",
+      trim: true,
     },
 
-    // PAYMENT METHOD
+    // PAYMENT METHOD (UPI, Net Banking, Card, COD, etc.)
     paymentMethod: {
       type: String,
-      enum: [
-        "ONLINE",
-        "COD",
-        "UPI",
-        "Card",
-        "Net Banking",
-        "Wallet",
-        "Other",
-        "",
-      ],
       default: "",
+      trim: true,
     },
 
     // PAYMENT STATUS
@@ -116,7 +156,50 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
 
-    // RAZORPAY STATUS
+    paymentStatus: {
+      type: String,
+      enum: [
+        "CREATED",
+        "PENDING",
+        "SUCCESS",
+        "FAILED",
+        "CANCELLED",
+        "REFUNDED",
+        "Pending",
+        "Success",
+        "Failed",
+        "Cancelled",
+        "Refunded",
+      ],
+      default: "PENDING",
+      index: true,
+    },
+
+    verificationStatus: {
+      type: String,
+      enum: ["PENDING", "VERIFIED", "FAILED", "SKIPPED"],
+      default: "PENDING",
+      index: true,
+    },
+
+    transactionDate: {
+      type: Date,
+      default: Date.now,
+    },
+
+    failureReason: {
+      type: String,
+      default: "",
+    },
+
+    webhookEventId: {
+      type: String,
+      default: "",
+      index: true,
+      trim: true,
+    },
+
+    // RAZORPAY RAW STATUS
     razorpayStatus: {
       type: String,
       default: "",
@@ -125,12 +208,7 @@ const paymentSchema = new mongoose.Schema(
     // SETTLEMENT
     settlementStatus: {
       type: String,
-      enum: [
-        "Pending",
-        "Processing",
-        "Settled",
-        "Failed",
-      ],
+      enum: ["Pending", "Processing", "Settled", "Failed"],
       default: "Pending",
     },
 
@@ -139,25 +217,20 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // PROVIDER
+    // PROVIDER (Doctor, Lab, Pharmacy)
     providerId: {
       type: String,
       default: "",
+      trim: true,
     },
 
     providerType: {
       type: String,
-      enum: [
-        "Doctor",
-        "Lab",
-        "Laboratory",
-        "Pharmacy",
-        "",
-      ],
+      enum: ["Doctor", "Lab", "Laboratory", "Pharmacy", ""],
       default: "",
     },
 
-    // HEALTHHOME COMMISSION
+    // COMMISSION & SPLIT
     platformFee: {
       type: Number,
       default: 0,
@@ -203,7 +276,35 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-// Only non-empty Razorpay payment IDs must be unique.
+// Synchronize legacy and new field names on save
+paymentSchema.pre("save", function (next) {
+  if (this.orderId && !this.razorpayOrderId) {
+    this.razorpayOrderId = this.orderId;
+  } else if (this.razorpayOrderId && !this.orderId) {
+    this.orderId = this.razorpayOrderId;
+  }
+
+  if (this.paymentId && !this.razorpayPaymentId) {
+    this.razorpayPaymentId = this.paymentId;
+  } else if (this.razorpayPaymentId && !this.paymentId) {
+    this.paymentId = this.razorpayPaymentId;
+  }
+
+  if (this.signature && !this.razorpaySignature) {
+    this.razorpaySignature = this.signature;
+  } else if (this.razorpaySignature && !this.signature) {
+    this.signature = this.razorpaySignature;
+  }
+
+  if (this.status === "Success" && this.paymentStatus !== "SUCCESS") {
+    this.paymentStatus = "SUCCESS";
+    this.verificationStatus = "VERIFIED";
+  }
+
+  next();
+});
+
+// Partial unique index for non-empty payment IDs
 paymentSchema.index(
   { paymentId: 1 },
   {
@@ -214,7 +315,17 @@ paymentSchema.index(
   }
 );
 
-// Only non-empty Razorpay order IDs must be unique.
+paymentSchema.index(
+  { razorpayPaymentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      razorpayPaymentId: { $type: "string", $gt: "" },
+    },
+  }
+);
+
+// Partial unique index for non-empty order IDs
 paymentSchema.index(
   { orderId: 1 },
   {
@@ -225,7 +336,20 @@ paymentSchema.index(
   }
 );
 
-// Helpful lookup for service payment history.
+paymentSchema.index(
+  { razorpayOrderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      razorpayOrderId: { $type: "string", $gt: "" },
+    },
+  }
+);
+
+// Lookup index for user payment history
+paymentSchema.index({ userId: 1, createdAt: -1 });
+
+// Lookup index for service payment history
 paymentSchema.index({
   serviceType: 1,
   serviceId: 1,

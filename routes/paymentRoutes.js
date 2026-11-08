@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 
@@ -29,7 +28,6 @@ router.post(
 // ==========================================
 
 // Create doctor appointment payment order
-// Authentication runs before report uploads.
 router.post(
   "/create-doctor-order",
   authMiddleware,
@@ -49,6 +47,22 @@ router.post(
   "/cancel-doctor-order",
   authMiddleware,
   paymentController.cancelDoctorOrder
+);
+
+// ==========================================
+// PAYMENT HISTORY (Patient Module)
+// ==========================================
+
+router.get(
+  "/history",
+  authMiddleware,
+  paymentController.getPaymentHistory
+);
+
+router.get(
+  "/detail/:paymentId",
+  authMiddleware,
+  paymentController.getPaymentDetails
 );
 
 // ==========================================

@@ -91,6 +91,21 @@ const validateDoctorSlot = async ({ doctor, date, time, excludeAppointmentId }) 
     return "Selected time overlaps the doctor's break.";
   }
 
+  // Auto-expire stale pending appointments (>15 min) where checkout was abandoned
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+  await Appointment.updateMany(
+    {
+      doctorId: String(doctor._id),
+      appointmentDate: date,
+      status: "Pending",
+      paymentStatus: "Pending",
+      createdAt: { $lt: fifteenMinutesAgo },
+    },
+    {
+      $set: { status: "Cancelled", paymentStatus: "Failed" },
+    }
+  );
+
   const dayAppointments = await Appointment.find({
     doctorId: String(doctor._id),
     appointmentDate: date,
@@ -942,20 +957,28 @@ exports.getAvailableSlots = async (req, res) => {
 
     }
 
-    // Find appointments that occupy slots.
-
-    const bookedAppointments = await Appointment.find({
-
-      doctorId,
-
-      appointmentDate,
-
-      status: {
-
-        $in: ["Pending", "Upcoming", "Accepted"],
-
+    // Auto-expire stale pending appointments (>15 min) where checkout was abandoned
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    await Appointment.updateMany(
+      {
+        doctorId: String(doctorId),
+        appointmentDate,
+        status: "Pending",
+        paymentStatus: "Pending",
+        createdAt: { $lt: fifteenMinutesAgo },
       },
+      {
+        $set: { status: "Cancelled", paymentStatus: "Failed" },
+      }
+    );
 
+    // Find appointments that occupy slots.
+    const bookedAppointments = await Appointment.find({
+      doctorId,
+      appointmentDate,
+      status: {
+        $in: ["Pending", "Upcoming", "Accepted"],
+      },
     }).select("appointmentTime");
 
     if (bookedAppointments.length >= dailyLimit) {
