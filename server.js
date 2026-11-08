@@ -99,6 +99,7 @@ app.use(
   labRoutes
 );
 
+
 // ============================================================
 // PHARMACY ROUTES
 // ============================================================
@@ -107,6 +108,9 @@ app.use(
   "/api/pharmacies",
   pharmacyRoutes
 );
+
+console.log("Pharmacy Routes Loaded Successfully");
+
 
 // ============================================================
 // APPOINTMENT ROUTES
