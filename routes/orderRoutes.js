@@ -1,4 +1,5 @@
 const express = require("express");
+const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -202,6 +203,7 @@ router.put(
 
 router.put(
   "/cod/collect/:id",
+  authMiddleware,
   collectCODPayment
 );
 

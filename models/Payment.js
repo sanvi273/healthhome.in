@@ -128,6 +128,15 @@ const paymentSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // Canonical integer representation for new records. `amount` remains in
+    // rupees for compatibility with existing Flutter/payment-history clients.
+    amountPaise: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: Number.isSafeInteger,
+    },
+
     currency: {
       type: String,
       default: "INR",
@@ -185,6 +194,11 @@ const paymentSchema = new mongoose.Schema(
     transactionDate: {
       type: Date,
       default: Date.now,
+    },
+
+    capturedAt: {
+      type: Date,
+      default: null,
     },
 
     failureReason: {
@@ -252,6 +266,19 @@ const paymentSchema = new mongoose.Schema(
     cashCollectedAt: {
       type: Date,
       default: null,
+    },
+
+    cashCollectedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    cashCollectedAmountPaise: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: Number.isSafeInteger,
     },
 
     // REFUND

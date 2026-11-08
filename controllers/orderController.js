@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const Order = require("../models/orderModel");
 const Medicine = require("../models/medicine");
 const Pharmacy = require("../models/pharmacy");
+const User = require("../models/user");
 
 // ============================================================
 // HELPER: NORMALIZE PAYMENT METHOD
@@ -2676,6 +2677,14 @@ const collectCODPayment =
     res
   ) => {
     try {
+      const authenticatedUser = await User.findById(req.user?.id);
+      if (!authenticatedUser) {
+        return res.status(401).json({
+          success: false,
+          message: "Authenticated user not found.",
+        });
+      }
+
       const order =
         await Order.findById(
           req.params.id
@@ -2687,6 +2696,25 @@ const collectCODPayment =
           message:
             "Order not found.",
         });
+      }
+
+      if (authenticatedUser.role !== "admin") {
+        if (authenticatedUser.role !== "pharmacy") {
+          return res.status(403).json({
+            success: false,
+            message: "Only the order's pharmacy or an admin can confirm COD collection.",
+          });
+        }
+        const pharmacy = await Pharmacy.findById(order.pharmacyId);
+        if (
+          !pharmacy ||
+          String(pharmacy.phone || "").trim() !== String(authenticatedUser.phone || "").trim()
+        ) {
+          return res.status(403).json({
+            success: false,
+            message: "This order does not belong to your pharmacy account.",
+          });
+        }
       }
 
       if (
@@ -2765,19 +2793,55 @@ const collectCODPayment =
         }
       }
 
-      order.paymentStatus =
-        "Collected";
+      const confirmedAmountPaise = Math.round(Number(order.totalAmount) * 100);
+      if (!Number.isSafeInteger(confirmedAmountPaise) || confirmedAmountPaise <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "The COD amount is invalid.",
+        });
+      }
+      const submittedAmount = req.body?.amountPaise;
+      if (
+        submittedAmount !== undefined &&
+        Number(submittedAmount) !== confirmedAmountPaise
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "The confirmed cash amount does not match the order total.",
+          expectedAmountPaise: confirmedAmountPaise,
+        });
+      }
 
-      order.cashCollected =
-        true;
-
-      order.cashCollectedAt =
-        new Date();
-
-      order.settlementStatus =
-        "Pending";
-
-      await order.save();
+      const collectedAt = new Date();
+      const collectedOrder = await Order.findOneAndUpdate(
+        {
+          _id: order._id,
+          paymentMethod: { $in: ["COD", "Cash on Delivery"] },
+          cashCollected: { $ne: true },
+          paymentStatus: { $nin: ["Collected", "Paid"] },
+          status: { $in: ["Out for Delivery", "Delivered"] },
+        },
+        {
+          $set: {
+            paymentStatus: "Collected",
+            cashCollected: true,
+            cashCollectedAt: collectedAt,
+            cashCollectedBy: String(authenticatedUser._id),
+            cashCollectedAmountPaise: confirmedAmountPaise,
+            settlementStatus: "Pending",
+          },
+        },
+        { new: true, runValidators: true }
+      );
+      if (!collectedOrder) {
+        const latestOrder = await Order.findById(order._id);
+        return res.status(409).json({
+          success: false,
+          message: latestOrder?.cashCollected
+            ? "COD payment has already been collected."
+            : "Order is no longer eligible for COD collection.",
+        });
+      }
 
       console.log(
         "COD PAYMENT COLLECTED"
@@ -2785,12 +2849,12 @@ const collectCODPayment =
 
       console.log(
         "ORDER ID =",
-        order._id
+        collectedOrder._id
       );
 
       console.log(
         "AMOUNT =",
-        order.totalAmount
+        collectedOrder.totalAmount
       );
 
       return res.status(200).json({
@@ -2799,7 +2863,7 @@ const collectCODPayment =
         message:
           "COD payment marked as collected.",
 
-        order,
+        order: collectedOrder,
       });
     } catch (error) {
       console.error(

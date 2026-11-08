@@ -308,6 +308,15 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Additive audit fields: amounts are recorded in integer paise; existing
+    // rupee totalAmount and COD flags are retained for current clients.
+    cashCollectedAmountPaise: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: Number.isSafeInteger,
+    },
+
     cashCollectedBy: {
       type: String,
       default: "",
