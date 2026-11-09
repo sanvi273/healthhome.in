@@ -363,9 +363,53 @@ test("Medicine and Lab payments verify idempotently without changing service sta
   }
 });
 
+test("Payment save hook is compatible with Mongoose 9 pre-save middleware", () => {
+  let registeredSaveHook;
+  class FakeSchema {
+    pre(name, hook) {
+      if (name === "save") registeredSaveHook = hook;
+    }
+    index() {}
+  }
+  const fakeMongoose = {
+    Schema: FakeSchema,
+    model(_name, schema) { return schema; },
+  };
+  const paymentModelPath = require.resolve("../models/Payment");
+  const previousLoad = Module._load;
+  try {
+    delete require.cache[paymentModelPath];
+    Module._load = function (request, parent, isMain) {
+      if (request === "mongoose") return fakeMongoose;
+      return originalLoad.call(this, request, parent, isMain);
+    };
+    require("../models/Payment");
+  } finally {
+    Module._load = previousLoad;
+    delete require.cache[paymentModelPath];
+  }
+
+  assert.equal(typeof registeredSaveHook, "function");
+  assert.equal(registeredSaveHook.length, 0);
+  const payment = {
+    orderId: "order-1",
+    paymentId: "payment-1",
+    signature: "signature-1",
+    status: "Success",
+    paymentStatus: "PENDING",
+  };
+  assert.doesNotThrow(() => registeredSaveHook.call(payment));
+  assert.equal(payment.razorpayOrderId, "order-1");
+  assert.equal(payment.razorpayPaymentId, "payment-1");
+  assert.equal(payment.razorpaySignature, "signature-1");
+  assert.equal(payment.paymentStatus, "SUCCESS");
+  assert.equal(payment.verificationStatus, "VERIFIED");
+});
+
 test("Doctor checkout reuses one appointment/order and verification preserves appointment status", async () => {
   const user = patient();
-  state.users.push(user);
+  const stranger = patient("999999999999999999999999");
+  state.users.push(user, stranger);
   const doctorId = "444444444444444444444444";
   state.doctorProfile = {
     _id: doctorId,
@@ -412,6 +456,24 @@ test("Doctor checkout reuses one appointment/order and verification preserves ap
       razorpay_signature: verifySignature(first.body.order.id, paymentId),
     },
   };
+
+  const otherPatientAttempt = response();
+  await paymentController.verifyDoctorPayment({
+    ...verifyReq,
+    user: { id: stranger._id },
+  }, otherPatientAttempt);
+  assert.equal(otherPatientAttempt.statusCode, 403);
+  assert.equal(state.payments[0].status, "Pending");
+  assert.equal(state.appointments[0].paymentStatus, "Pending");
+
+  const invalidSignature = response();
+  await paymentController.verifyDoctorPayment({
+    ...verifyReq,
+    body: { ...verifyReq.body, razorpay_signature: "invalid-signature" },
+  }, invalidSignature);
+  assert.equal(invalidSignature.statusCode, 400);
+  assert.equal(state.appointments[0].paymentStatus, "Pending");
+
   const verified = response();
   await paymentController.verifyDoctorPayment(verifyReq, verified);
   assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));

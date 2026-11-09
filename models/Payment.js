@@ -304,7 +304,7 @@ const paymentSchema = new mongoose.Schema(
 );
 
 // Synchronize legacy and new field names on save
-paymentSchema.pre("save", function (next) {
+paymentSchema.pre("save", function () {
   if (this.orderId && !this.razorpayOrderId) {
     this.razorpayOrderId = this.orderId;
   } else if (this.razorpayOrderId && !this.orderId) {
@@ -328,7 +328,6 @@ paymentSchema.pre("save", function (next) {
     this.verificationStatus = "VERIFIED";
   }
 
-  next();
 });
 
 // Partial unique index for non-empty payment IDs
