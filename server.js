@@ -24,6 +24,7 @@ const sampleCollectorRoutes = require("./routes/sampleCollectorRoutes");
 const prescriptionRoutes = require("./routes/prescriptionRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 // ============================================================
 // APP
@@ -222,6 +223,17 @@ app.use(
 );
 
 console.log("Verification routes mounted.");
+
+// ============================================================
+// ADMIN ROUTES
+// ============================================================
+
+app.use(
+  "/api/admin",
+  adminRoutes
+);
+
+console.log("Admin routes mounted.");
 
 
  // ============================================================
