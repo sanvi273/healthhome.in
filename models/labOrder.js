@@ -65,7 +65,7 @@ const labOrderSchema = new mongoose.Schema(
 
     patientPhone: {
       type: String,
-      default: "",
+      required: true,
       index: true,
       trim: true,
     },
