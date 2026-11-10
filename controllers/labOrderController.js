@@ -11,9 +11,6 @@ const crypto = require("crypto");
 const addLabOrder = async (req, res) => {
   try {
     const {
-      patientId,
-      patientName,
-      patientPhone,
       doctorName,
       tests,
       labId,
@@ -23,12 +20,34 @@ const addLabOrder = async (req, res) => {
       prescriptionImage,
       collectionMode,
       bookingType,
+      paymentMethod,
     } = req.body;
 
-    if (!patientId || !patientName) {
+    const authenticatedUser = await User.findById(req.user?.id);
+    if (!authenticatedUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authenticated patient account was not found.",
+      });
+    }
+
+    if (
+      authenticatedUser.role !== "patient" ||
+      authenticatedUser.accountStatus !== "ACTIVE"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only active patients can create lab bookings.",
+      });
+    }
+
+    const patientId = String(authenticatedUser._id);
+    const patientName = String(authenticatedUser.name || "").trim();
+    const patientPhone = String(authenticatedUser.phone || "").trim();
+    if (!patientName || !patientPhone) {
       return res.status(400).json({
         success: false,
-        message: "Patient information is required.",
+        message: "Your patient profile needs a name and phone number before booking.",
       });
     }
 
@@ -60,6 +79,16 @@ const addLabOrder = async (req, res) => {
       String(bookingType || "TEST").toUpperCase() === "PRESCRIPTION"
         ? "PRESCRIPTION"
         : "TEST";
+
+    const finalPaymentMethod = String(paymentMethod || "ONLINE")
+      .trim()
+      .toUpperCase();
+    if (!["ONLINE", "COD"].includes(finalPaymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment method must be ONLINE or COD.",
+      });
+    }
 
     const finalCollectionMode =
       collectionMode === "Visit Laboratory"
@@ -146,10 +175,17 @@ const addLabOrder = async (req, res) => {
       finalTests = [];
     }
 
+    if (finalPaymentMethod === "COD" && (finalBookingType !== "TEST" || totalAmount <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: "Cash on collection is available only for priced lab test bookings.",
+      });
+    }
+
     const order = await LabOrder.create({
-      patientId: String(patientId).trim(),
-      patientName: String(patientName).trim(),
-      patientPhone: String(patientPhone || "").trim(),
+      patientId,
+      patientName,
+      patientPhone,
       doctorName: String(doctorName || "").trim(),
       bookingType: finalBookingType,
       tests: finalTests,
@@ -158,11 +194,16 @@ const addLabOrder = async (req, res) => {
       address: String(address || "").trim(),
       notes: String(notes || "").trim(),
       totalAmount,
+      paymentMethod: finalPaymentMethod,
       paymentStatus: "Pending",
       razorpayOrderId: "",
       razorpayPaymentId: "",
       razorpaySignature: "",
       paymentRecordId: "",
+      cashCollected: false,
+      cashCollectedAt: null,
+      cashCollectedBy: "",
+      cashCollectedAmountPaise: 0,
       prescriptionImage: String(prescriptionImage || "").trim(),
       collectionMode: finalCollectionMode,
       collectorId: "",
@@ -212,6 +253,119 @@ const addLabOrder = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error?.message || "Unable to create lab booking.",
+    });
+  }
+};
+
+const collectLabCODPayment = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?.id);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authenticated laboratory account was not found.",
+      });
+    }
+    if (
+      user.role !== "laboratory" ||
+      user.accountStatus !== "ACTIVE" ||
+      user.verificationStatus !== "APPROVED"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only an active, approved laboratory can confirm cash collection.",
+      });
+    }
+
+    const lab = await Lab.findOne({ userId: user._id });
+    if (!lab) {
+      return res.status(403).json({
+        success: false,
+        message: "A laboratory profile is not linked to this account.",
+      });
+    }
+
+    const order = await LabOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Lab booking not found." });
+    }
+    if (String(order.labId) !== String(lab._id)) {
+      return res.status(403).json({
+        success: false,
+        message: "This booking does not belong to your laboratory.",
+      });
+    }
+    if (order.paymentMethod !== "COD") {
+      return res.status(400).json({
+        success: false,
+        message: "This lab booking is not payable by cash on collection.",
+      });
+    }
+
+    const collectibleStatuses = [
+      "Sample Collected",
+      "Sample Received",
+      "In Progress",
+      "Report Ready",
+      "Completed",
+    ];
+    const amountPaise = Math.round(Number(order.totalAmount) * 100);
+    if (!Number.isSafeInteger(amountPaise) || amountPaise <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "The lab booking has no valid amount to collect.",
+      });
+    }
+    if (
+      req.body?.amountPaise !== undefined &&
+      Number(req.body.amountPaise) !== amountPaise
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "The confirmed cash amount does not match the lab booking total.",
+      });
+    }
+
+    const collectedAt = new Date();
+    const collectedOrder = await LabOrder.findOneAndUpdate(
+      {
+        _id: order._id,
+        labId: String(lab._id),
+        paymentMethod: "COD",
+        paymentStatus: "Pending",
+        cashCollected: { $ne: true },
+        status: { $in: collectibleStatuses },
+      },
+      {
+        $set: {
+          paymentStatus: "Paid",
+          cashCollected: true,
+          cashCollectedAt: collectedAt,
+          cashCollectedBy: String(user._id),
+          cashCollectedAmountPaise: amountPaise,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!collectedOrder) {
+      return res.status(409).json({
+        success: false,
+        message: "Cash collection is not available for this booking state or was already recorded.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Lab COD payment recorded successfully.",
+      order: collectedOrder,
+      amountPaise,
+      collectedAt,
+    });
+  } catch (error) {
+    console.error("COLLECT LAB COD PAYMENT ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to record lab cash collection.",
     });
   }
 };
@@ -1945,6 +2099,7 @@ const respondToLabReschedule = async (req, res) => {
 
 module.exports = {
   addLabOrder,
+  collectLabCODPayment,
   getLabOrders,
   getLabOrderById,
   acceptLabOrder,

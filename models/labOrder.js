@@ -65,7 +65,7 @@ const labOrderSchema = new mongoose.Schema(
 
     patientPhone: {
       type: String,
-      default: "",
+      required: true,
       index: true,
       trim: true,
     },
@@ -141,6 +141,13 @@ const labOrderSchema = new mongoose.Schema(
       min: 0,
     },
 
+    paymentMethod: {
+      type: String,
+      enum: ["ONLINE", "COD"],
+      default: "ONLINE",
+      index: true,
+    },
+
     paymentStatus: {
       type: String,
       enum: ["Pending", "Paid", "Failed"],
@@ -168,6 +175,29 @@ const labOrderSchema = new mongoose.Schema(
     paymentRecordId: {
       type: String,
       default: "",
+    },
+
+    cashCollected: {
+      type: Boolean,
+      default: false,
+    },
+
+    cashCollectedAt: {
+      type: Date,
+      default: null,
+    },
+
+    cashCollectedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    cashCollectedAmountPaise: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: Number.isSafeInteger,
     },
 
     // ======================================================

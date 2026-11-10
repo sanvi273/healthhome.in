@@ -354,6 +354,16 @@ exports.createOrder = async (req, res) => {
     // Get order details from database
     const data = await getServiceData(serviceType, serviceId);
 
+    if (
+      serviceType === "Lab" &&
+      safeString(data.service?.paymentMethod).toUpperCase() === "COD"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "This lab booking is set for cash collection, not online payment.",
+      });
+    }
+
     // Ownership check
     if (!validatePatientForService(data, authenticatedUser)) {
       return res.status(403).json({
@@ -378,6 +388,42 @@ exports.createOrder = async (req, res) => {
     }
 
     const amountInPaise = Math.round(amount * 100);
+
+    if (serviceType === "Lab") {
+      const pendingPayment = await Payment.findOne({
+        serviceType: "Lab",
+        serviceId: String(serviceId),
+        userId: String(authenticatedUser._id),
+        status: "Pending",
+      });
+      const existingOrderId = safeString(
+        pendingPayment?.razorpayOrderId || pendingPayment?.orderId
+      );
+      if (pendingPayment && existingOrderId) {
+        const existingAmountPaise = Math.round(
+          Number(pendingPayment.amount) * 100
+        );
+        if (existingAmountPaise !== amountInPaise) {
+          return res.status(409).json({
+            success: false,
+            message: "The lab booking amount changed. Start a fresh checkout.",
+          });
+        }
+        return res.status(200).json({
+          success: true,
+          order: {
+            id: existingOrderId,
+            amount: amountInPaise,
+            currency: pendingPayment.currency || "INR",
+          },
+          key: razorpayKeyId,
+          amount: amountInPaise,
+          currency: pendingPayment.currency || "INR",
+          paymentRecordId: String(pendingPayment._id),
+          reused: true,
+        });
+      }
+    }
 
     // Create official Razorpay order
     const razorpayOrder = await razorpay.orders.create({
@@ -496,6 +542,17 @@ exports.verifyPayment = async (req, res) => {
 
     // Fetch database order data
     const data = await getServiceData(serviceType, serviceId);
+
+    if (
+      serviceType === "Lab" &&
+      safeString(data.service?.paymentMethod).toUpperCase() === "COD"
+    ) {
+      return res.status(409).json({
+        success: false,
+        paid: false,
+        message: "This lab booking is set for cash collection, not online payment.",
+      });
+    }
 
     // Ownership check
     if (!validatePatientForService(data, authenticatedUser)) {
