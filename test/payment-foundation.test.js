@@ -268,6 +268,65 @@ test("Medicine checkout derives amount from the stored order and reuses a pendin
   assert.equal(gatewayState.orderCalls, 1);
 });
 
+test("Lab checkout uses the authenticated owner, stored price, and one Razorpay order", async () => {
+  const user = patient();
+  state.users.push(user);
+  state.labOrders.push({
+    _id: "333333333333333333333333",
+    patientId: user._id,
+    patientPhone: user.phone,
+    totalAmount: 123.45,
+    paymentMethod: "ONLINE",
+    paymentStatus: "Pending",
+    status: "Pending",
+    labId: "lab-1",
+  });
+
+  const req = {
+    user: { id: user._id },
+    body: {
+      serviceType: "Lab",
+      serviceId: state.labOrders[0]._id,
+      amount: 0.01,
+    },
+  };
+  const first = response();
+  await paymentController.createOrder(req, first);
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.body.amount, 12345);
+  assert.equal(state.payments.length, 1);
+  assert.equal(gatewayState.orderCalls, 1);
+
+  const retry = response();
+  await paymentController.createOrder(req, retry);
+  assert.equal(retry.statusCode, 200);
+  assert.equal(retry.body.reused, true);
+  assert.equal(gatewayState.orderCalls, 1);
+});
+
+test("COD Lab bookings cannot create an online Razorpay checkout", async () => {
+  const user = patient();
+  state.users.push(user);
+  state.labOrders.push({
+    _id: "444444444444444444444444",
+    patientId: user._id,
+    patientPhone: user.phone,
+    totalAmount: 80,
+    paymentMethod: "COD",
+    paymentStatus: "Pending",
+    status: "Pending",
+  });
+
+  const result = response();
+  await paymentController.createOrder({
+    user: { id: user._id },
+    body: { serviceType: "Lab", serviceId: state.labOrders[0]._id },
+  }, result);
+  assert.equal(result.statusCode, 409);
+  assert.equal(gatewayState.orderCalls, 0);
+  assert.equal(state.payments.length, 0);
+});
+
 test("a legacy pending payment is linked to the checkout instead of creating another Razorpay order", async () => {
   const user = patient();
   state.users.push(user);

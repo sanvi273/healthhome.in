@@ -501,9 +501,19 @@ const validatePatientForService = (data, user) => {
   const matchesId = authUserId && bookingPatientId && authUserId === bookingPatientId;
   const matchesPhone = authPhone && bookingPatientPhone && authPhone === bookingPatientPhone;
 
-  // A present patientId is authoritative; never fall back to a shared phone
-  // number when the record is already linked to another account.
-  return bookingPatientId ? Boolean(matchesId) : Boolean(matchesPhone);
+  // New bookings store the authenticated User ObjectId. Legacy lab bookings
+  // stored the patient's phone in patientId; allow only that exact legacy
+  // representation when it also matches the authenticated account's phone.
+  const matchesLegacyPhoneId =
+    bookingPatientId &&
+    !isValidObjectId(bookingPatientId) &&
+    authPhone &&
+    bookingPatientId === authPhone &&
+    bookingPatientPhone === authPhone;
+
+  return bookingPatientId
+    ? Boolean(matchesId || matchesLegacyPhoneId)
+    : Boolean(matchesPhone);
 };
 
 const paymentBelongsToUser = (payment, user) => {
@@ -621,6 +631,13 @@ exports.createOrder = async (req, res) => {
 
     // Get order details from database
     const data = await getServiceData(serviceType, serviceId);
+
+    if (serviceType === "Lab" && safeString(data.service?.paymentMethod).toUpperCase() === "COD") {
+      return res.status(409).json({
+        success: false,
+        message: "This lab booking is set for cash collection, not online payment.",
+      });
+    }
 
     // Ownership check
     if (!validatePatientForService(data, authenticatedUser)) {
@@ -831,6 +848,14 @@ exports.verifyPayment = async (req, res) => {
 
     // Fetch database order data
     const data = await getServiceData(serviceType, serviceId);
+
+    if (serviceType === "Lab" && safeString(data.service?.paymentMethod).toUpperCase() === "COD") {
+      return res.status(409).json({
+        success: false,
+        paid: false,
+        message: "This lab booking is set for cash collection, not online payment.",
+      });
+    }
 
     // Ownership check
     if (!validatePatientForService(data, authenticatedUser)) {

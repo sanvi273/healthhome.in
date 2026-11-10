@@ -5,6 +5,7 @@ const router = express.Router();
 
 const {
   addLabOrder,
+  collectLabCODPayment,
   getLabOrders,
   getLabOrderById,
   acceptLabOrder,
@@ -43,7 +44,13 @@ router.get("/test", (req, res) => {
 // CREATE AND FETCH BOOKINGS
 // ==========================================================
 
-router.post("/add", addLabOrder);
+router.post("/add", authMiddleware, addLabOrder);
+
+router.post(
+  "/cod/collect/:id",
+  authMiddleware,
+  collectLabCODPayment
+);
 
 router.get("/all", getLabOrders);
 
