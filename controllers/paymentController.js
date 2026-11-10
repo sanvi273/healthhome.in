@@ -364,6 +364,18 @@ exports.createOrder = async (req, res) => {
       });
     }
 
+    if (
+      serviceType === "Medicine" &&
+      ["COD", "CASH ON DELIVERY"].includes(
+        safeString(data.service?.paymentMethod).toUpperCase()
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "This pharmacy order is set for Cash on Delivery, not online payment.",
+      });
+    }
+
     // Ownership check
     if (!validatePatientForService(data, authenticatedUser)) {
       return res.status(403).json({
@@ -389,9 +401,9 @@ exports.createOrder = async (req, res) => {
 
     const amountInPaise = Math.round(amount * 100);
 
-    if (serviceType === "Lab") {
+    if (["Lab", "Medicine"].includes(serviceType)) {
       const pendingPayment = await Payment.findOne({
-        serviceType: "Lab",
+        serviceType,
         serviceId: String(serviceId),
         userId: String(authenticatedUser._id),
         status: "Pending",
@@ -406,7 +418,7 @@ exports.createOrder = async (req, res) => {
         if (existingAmountPaise !== amountInPaise) {
           return res.status(409).json({
             success: false,
-            message: "The lab booking amount changed. Start a fresh checkout.",
+            message: `The ${serviceType === "Lab" ? "lab booking" : "pharmacy order"} amount changed. Start a fresh checkout.`,
           });
         }
         return res.status(200).json({
@@ -540,6 +552,18 @@ exports.verifyPayment = async (req, res) => {
       });
     }
 
+    if (
+      serviceType === "Medicine" &&
+      (authenticatedUser.role !== "patient" ||
+        authenticatedUser.accountStatus !== "ACTIVE")
+    ) {
+      return res.status(403).json({
+        success: false,
+        paid: false,
+        message: "Only active patients can pay for pharmacy orders.",
+      });
+    }
+
     // Fetch database order data
     const data = await getServiceData(serviceType, serviceId);
 
@@ -551,6 +575,19 @@ exports.verifyPayment = async (req, res) => {
         success: false,
         paid: false,
         message: "This lab booking is set for cash collection, not online payment.",
+      });
+    }
+
+    if (
+      serviceType === "Medicine" &&
+      ["COD", "CASH ON DELIVERY"].includes(
+        safeString(data.service?.paymentMethod).toUpperCase()
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        paid: false,
+        message: "This pharmacy order is set for Cash on Delivery, not online payment.",
       });
     }
 
@@ -645,14 +682,30 @@ exports.verifyPayment = async (req, res) => {
     const resolvedMethod = formatPaymentMethod(razorpayPayment.method);
 
     // 3. Update Payment record in MongoDB
+    // Pharmacy verification must be tied to the exact pending payment record
+    // created for this patient, order, and Razorpay order. Never upsert from
+    // client supplied service IDs or match only the order reference.
+    const paymentFilter = serviceType === "Medicine"
+      ? {
+          serviceType: "Medicine",
+          serviceId: String(serviceId),
+          userId: String(authenticatedUser._id),
+          status: { $in: ["Pending", "Success"] },
+          $or: [
+            { razorpayOrderId: razorpay_order_id },
+            { orderId: razorpay_order_id },
+          ],
+        }
+      : {
+          $or: [
+            { razorpayOrderId: razorpay_order_id },
+            { orderId: razorpay_order_id },
+            { orderReferenceId: serviceId },
+          ],
+        };
+
     const paymentRecord = await Payment.findOneAndUpdate(
-      {
-        $or: [
-          { razorpayOrderId: razorpay_order_id },
-          { orderId: razorpay_order_id },
-          { orderReferenceId: serviceId },
-        ],
-      },
+      paymentFilter,
       {
         $set: {
           paymentId: razorpay_payment_id,
@@ -669,8 +722,16 @@ exports.verifyPayment = async (req, res) => {
           transactionDate: new Date(),
         },
       },
-      { new: true, upsert: true }
+      { new: true, upsert: serviceType !== "Medicine" }
     );
+
+    if (!paymentRecord) {
+      return res.status(409).json({
+        success: false,
+        paid: false,
+        message: "No matching pending pharmacy payment was found for this order.",
+      });
+    }
 
     // 4. Update the order/lab-order in MongoDB
     await markServicePaid(
