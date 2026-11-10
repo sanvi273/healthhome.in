@@ -41,7 +41,6 @@ const paymentSchema = new mongoose.Schema(
     razorpayPaymentId: {
       type: String,
       default: "",
-      index: true,
       trim: true,
     },
 
@@ -54,7 +53,6 @@ const paymentSchema = new mongoose.Schema(
     razorpayOrderId: {
       type: String,
       default: "",
-      index: true,
       trim: true,
     },
 
