@@ -19,7 +19,14 @@ test("admin analytics returns totals and per-provider breakdown for selected ran
   const model = (records) => ({
     find(filter) {
       state.filters.push(filter);
-      return { lean: async () => records };
+      return {
+        select(fields) {
+          state.projections ??= [];
+          state.projections.push(fields);
+          return this;
+        },
+        lean: async () => records,
+      };
     },
   });
   const models = {
@@ -69,6 +76,9 @@ test("admin analytics returns totals and per-provider breakdown for selected ran
     assert.equal(response.body.services.medicine.providers[0].providerPayableEstimate, 475);
     assert.equal(response.body.services.laboratory.paidCount, 0);
     assert.equal(state.filters.length, 3);
+    assert.equal(state.projections.length, 3);
+    assert.match(state.projections[0], /doctorId/);
+    assert.doesNotMatch(state.projections[0], /patientPhone/);
     for (const filter of state.filters) {
       assert.ok(filter.createdAt.$gte instanceof Date);
       assert.ok(filter.createdAt.$lt instanceof Date);

@@ -127,9 +127,15 @@ const getAdminAnalytics = async (req, res) => {
 
     const filter = { createdAt: { $gte: range.start, $lt: range.end } };
     const [appointments, medicineOrders, labOrders] = await Promise.all([
-      Appointment.find(filter).lean(),
-      Order.find(filter).lean(),
-      LabOrder.find(filter).lean(),
+      Appointment.find(filter)
+        .select("doctorId doctorName fees paymentStatus providerAmount platformFee createdAt")
+        .lean(),
+      Order.find(filter)
+        .select("pharmacyId pharmacyName totalAmount paymentStatus cashCollected providerAmount platformFee createdAt")
+        .lean(),
+      LabOrder.find(filter)
+        .select("labId labName totalAmount paymentStatus providerAmount platformFee createdAt")
+        .lean(),
     ]);
 
     const services = {
