@@ -201,78 +201,6 @@ const initiateLogin = async (req, res) => {
   }
 };
 
-// Temporary password-only sign-in keeps login available while MSG91 login OTP
-// delivery is deferred. Registration and password reset continue to use OTP.
-const loginWithPassword = async (req, res) => {
-  try {
-    if (!allowIp(req.ip)) return rateLimited(res);
-    const phone = normalizePhone(req.body.phone);
-    const role = String(req.body.role || "").trim().toLowerCase();
-    const password = req.body.password;
-    if (!phone || typeof password !== "string" || !allowedRoles.includes(role)) {
-      return res.status(400).json({ success: false, message: "Invalid phone, role or credentials." });
-    }
-
-    const user = await User.findOne({ phone: phoneQuery(phone), role });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ success: false, message: "Unable to sign in with those details." });
-    }
-    if (user.accountStatus === "SUSPENDED") {
-      return res.status(403).json({ success: false, message: "Your account is suspended. Please contact HealthHome support." });
-    }
-
-    if (role !== "admin") {
-      const terms = getCurrentTerms(role);
-      if (!await hasCurrentAcceptance(user._id, role, terms)) {
-        const acceptance = await findAcceptanceToken(req.body.termsAcceptanceToken, role, terms, user._id);
-        if (!acceptance || !await associateAcceptance(acceptance._id, user._id, role, terms)) {
-          return res.status(428).json({
-            success: false,
-            code: "TERMS_ACCEPTANCE_REQUIRED",
-            message: "Please review and accept the current terms for this role before signing in.",
-          });
-        }
-      }
-    }
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role, verificationStatus: user.verificationStatus },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" },
-    );
-    const isProfessional = ["doctor", "laboratory", "pharmacy"].includes(user.role);
-    let message = "Login successful";
-    if (isProfessional && user.verificationStatus === "PENDING") {
-      message = "Login successful. Your professional account is pending verification.";
-    } else if (isProfessional && user.verificationStatus === "UNDER_REVIEW") {
-      message = "Login successful. Your professional documents are currently under review.";
-    } else if (isProfessional && user.verificationStatus === "REJECTED") {
-      message = "Login successful. Your professional verification was rejected. Please review your verification details.";
-    }
-
-    return res.status(200).json({
-      success: true,
-      message,
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phone: user.phone,
-        profileImage: user.profileImage,
-        accountStatus: user.accountStatus,
-        verificationStatus: user.verificationStatus,
-        verificationId: user.verificationId,
-        addresses: user.addresses,
-      },
-    });
-  } catch (error) {
-    console.error("PASSWORD LOGIN FAILED");
-    return res.status(500).json({ success: false, message: "Unable to sign in. Please try again." });
-  }
-};
-
 const verifyLogin = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
@@ -508,4 +436,4 @@ const resendLogin = async (req, res) => {
   }
 };
 
-module.exports = { initiateLogin, loginWithPassword, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword, createChallenge, normalizePhone, msg91, verifyWidgetAccessToken };
+module.exports = { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword, createChallenge, normalizePhone, msg91, verifyWidgetAccessToken };

@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const TermsAcceptance = require("../models/termsAcceptance");
 const {
   normalizeRole,
@@ -28,6 +27,35 @@ function limited(ip) {
   return bucket.count > 100;
 }
 
+function isActiveAcceptanceFor(record, role, terms, now = new Date()) {
+  return Boolean(
+    record &&
+      record.acceptanceStatus === "ACCEPTED" &&
+      record.selectedRole === role &&
+      record.termsDocumentType === terms.documentType &&
+      record.termsVersion === terms.version &&
+      record.termsContentHash === terms.contentHash &&
+      (!record.expiresAt || record.expiresAt > now),
+  );
+}
+
+function acceptanceResponse(res, status, token, record, role, terms, alreadyAccepted = false) {
+  return res.status(status).json({
+    success: true,
+    acceptanceToken: token,
+    acceptedAt: record.acceptedAt.toISOString(),
+    role,
+    termsVersion: terms.version,
+    alreadyAccepted,
+  });
+}
+
+async function findSessionRecord(tokenHash) {
+  return TermsAcceptance.findOne({ acceptanceTokenHash: tokenHash }).select(
+    "selectedRole termsDocumentType termsVersion termsContentHash acceptanceStatus acceptedAt expiresAt",
+  );
+}
+
 exports.current = async (req, res) => {
   const terms = getCurrentTerms(req.params.role);
   if (!terms) return res.status(404).json({ success: false, message: "Terms are not available for this role." });
@@ -55,20 +83,48 @@ exports.accept = async (req, res) => {
     if (!terms || !DOCUMENT_TYPES.has(String(req.body?.termsDocumentType || "")) || req.body.termsDocumentType !== terms.documentType || req.body.termsVersion !== terms.version || req.body.termsContentHash !== terms.contentHash) {
       return res.status(409).json({ success: false, code: "TERMS_VERSION_MISMATCH", message: "These terms have changed. Reload and review the current document." });
     }
-    const token = crypto.randomBytes(32).toString("base64url");
+    const token = req.body?.onboardingSessionToken;
+    if (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
+      return res.status(400).json({ success: false, message: "A valid onboarding session is required." });
+    }
+    const tokenHash = acceptanceTokenHash(token);
     const acceptedAt = new Date();
-    await TermsAcceptance.create({
+    const existing = await findSessionRecord(tokenHash);
+    if (existing) {
+      if (existing.expiresAt && existing.expiresAt <= acceptedAt) {
+        return res.status(410).json({ success: false, code: "ONBOARDING_SESSION_EXPIRED", message: "This onboarding session expired. Please accept the current terms again." });
+      }
+      if (!isActiveAcceptanceFor(existing, role, terms, acceptedAt)) {
+        return res.status(409).json({ success: false, code: "ONBOARDING_SESSION_MISMATCH", message: "This onboarding session belongs to another terms acceptance." });
+      }
+      return acceptanceResponse(res, 200, token, existing, role, terms, true);
+    }
+
+    const recordData = {
       selectedRole: role,
       termsDocumentType: terms.documentType,
       termsVersion: terms.version,
       termsContentHash: terms.contentHash,
       policyVersion: terms.policyVersion,
+      businessDetails: terms.businessDetails,
       acceptedAt,
       acceptanceStatus: "ACCEPTED",
-      acceptanceTokenHash: acceptanceTokenHash(token),
+      acceptanceTokenHash: tokenHash,
       expiresAt: new Date(acceptedAt.getTime() + 30 * 24 * 60 * 60 * 1000),
-    });
-    return res.status(201).json({ success: true, acceptanceToken: token, acceptedAt: acceptedAt.toISOString(), role, termsVersion: terms.version });
+    };
+    try {
+      const record = await TermsAcceptance.create(recordData);
+      return acceptanceResponse(res, 201, token, record, role, terms);
+    } catch (error) {
+      // A concurrent retry may win the unique token-hash index between lookup
+      // and create. Return that saved acceptance if it matches this request.
+      if (error.code !== 11000) throw error;
+      const raced = await findSessionRecord(tokenHash);
+      if (!isActiveAcceptanceFor(raced, role, terms)) {
+        return res.status(409).json({ success: false, code: "ONBOARDING_SESSION_MISMATCH", message: "This onboarding session belongs to another terms acceptance." });
+      }
+      return acceptanceResponse(res, 200, token, raced, role, terms, true);
+    }
   } catch (error) {
     console.error("TERMS ACCEPTANCE RECORD FAILED", { errorType: error.name || "DatabaseError" });
     return res.status(500).json({ success: false, message: "Unable to save acceptance. Please try again." });

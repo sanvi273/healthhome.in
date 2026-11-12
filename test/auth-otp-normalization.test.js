@@ -1,10 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizePhone, msg91, verifyWidgetAccessToken, loginWithPassword } = require("../controllers/authOtpController");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const User = require("../models/user");
-const TermsAcceptance = require("../models/termsAcceptance");
+const { normalizePhone, msg91, verifyWidgetAccessToken } = require("../controllers/authOtpController");
 
 test("authentication phone normalization supports Indian local and E.164 input", () => {
   assert.equal(normalizePhone("98765 43210"), "919876543210");
@@ -65,57 +61,3 @@ test("MSG91 Widget access-token validation sends Auth Key in the documented head
     else process.env.MSG91_AUTH_KEY = originalAuthKey;
   }
 });
-
-test("password login returns a session after password and current terms checks without OTP", async () => {
-  const originals = {
-    findOne: User.findOne,
-    compare: bcrypt.compare,
-    exists: TermsAcceptance.exists,
-    sign: jwt.sign,
-    secret: process.env.JWT_SECRET,
-  };
-  const user = {
-    _id: "user-123",
-    name: "Test Patient",
-    email: "patient@example.test",
-    role: "patient",
-    phone: "9876543210",
-    password: "hashed-password",
-    accountStatus: "ACTIVE",
-    verificationStatus: "NOT_REQUIRED",
-    addresses: [],
-  };
-  let query;
-  User.findOne = async (value) => { query = value; return user; };
-  bcrypt.compare = async (password, hash) => password === "correct-password" && hash === "hashed-password";
-  TermsAcceptance.exists = async () => true;
-  jwt.sign = () => "test-jwt";
-  process.env.JWT_SECRET = "test-secret";
-
-  try {
-    const response = await callLogin({ phone: "9876543210", password: "correct-password", role: "patient" });
-    assert.equal(response.statusCode, 200);
-    assert.equal(response.body.success, true);
-    assert.equal(response.body.token, "test-jwt");
-    assert.equal(response.body.user.role, "patient");
-    assert.deepEqual(query, { phone: { $in: ["919876543210", "+919876543210", "9876543210"] }, role: "patient" });
-  } finally {
-    User.findOne = originals.findOne;
-    bcrypt.compare = originals.compare;
-    TermsAcceptance.exists = originals.exists;
-    jwt.sign = originals.sign;
-    if (originals.secret === undefined) delete process.env.JWT_SECRET;
-    else process.env.JWT_SECRET = originals.secret;
-  }
-});
-
-async function callLogin(body) {
-  const response = {
-    statusCode: 200,
-    body: null,
-    status(code) { this.statusCode = code; return this; },
-    json(value) { this.body = value; return this; },
-  };
-  await loginWithPassword({ body, ip: `password-login-test-${Date.now()}-${Math.random()}` }, response);
-  return response;
-}

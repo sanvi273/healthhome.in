@@ -67,10 +67,41 @@ test("acceptance endpoint rejects a document belonging to a different role", asy
   assert.equal(response.body.code, "TERMS_VERSION_MISMATCH");
 });
 
+test("acceptance endpoint rejects an unsupported role", async () => {
+  const response = await callController(termsController.accept, {
+    selectedRole: "administrator",
+    termsDocumentType: "patient_individual",
+    termsVersion: "1.0.0",
+    termsContentHash: getCurrentTerms("patient").contentHash,
+    onboardingSessionToken: "A".repeat(43),
+    accepted: true,
+    readToEnd: true,
+  });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.success, false);
+});
+
+test("acceptance endpoint requires an opaque onboarding session", async () => {
+  const terms = getCurrentTerms("patient");
+  const response = await callController(termsController.accept, {
+    selectedRole: "patient",
+    termsDocumentType: terms.documentType,
+    termsVersion: terms.version,
+    termsContentHash: terms.contentHash,
+    accepted: true,
+    readToEnd: true,
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.success, false);
+});
+
 test("acceptance endpoint stores the exact current role, version and content hash", async () => {
   const terms = getCurrentTerms("pharmacy");
   const originalCreate = TermsAcceptance.create;
+  const originalFindOne = TermsAcceptance.findOne;
+  const sessionToken = "P".repeat(43);
   let record;
+  TermsAcceptance.findOne = () => ({ select: async () => null });
   TermsAcceptance.create = async (data) => {
     record = data;
     return data;
@@ -81,6 +112,7 @@ test("acceptance endpoint stores the exact current role, version and content has
       termsDocumentType: terms.documentType,
       termsVersion: terms.version,
       termsContentHash: terms.contentHash,
+      onboardingSessionToken: sessionToken,
       accepted: true,
       readToEnd: true,
     });
@@ -90,10 +122,80 @@ test("acceptance endpoint stores the exact current role, version and content has
     assert.equal(record.termsDocumentType, terms.documentType);
     assert.equal(record.termsVersion, terms.version);
     assert.equal(record.termsContentHash, terms.contentHash);
-    assert.notEqual(record.acceptanceTokenHash, response.body.acceptanceToken);
+    assert.deepEqual(record.businessDetails, terms.businessDetails);
+    assert.deepEqual(record.policyVersion, terms.policyVersion);
+    assert.equal(record.acceptanceTokenHash, acceptanceTokenHash(sessionToken));
+    assert.equal(response.body.acceptanceToken, sessionToken);
     assert.equal(record.userId, undefined);
   } finally {
     TermsAcceptance.create = originalCreate;
+    TermsAcceptance.findOne = originalFindOne;
+  }
+});
+
+test("acceptance retry with the same onboarding session is idempotent", async () => {
+  const terms = getCurrentTerms("doctor");
+  const sessionToken = "D".repeat(43);
+  const existing = {
+    selectedRole: "doctor",
+    termsDocumentType: terms.documentType,
+    termsVersion: terms.version,
+    termsContentHash: terms.contentHash,
+    acceptanceStatus: "ACCEPTED",
+    acceptedAt: new Date(),
+    expiresAt: new Date(Date.now() + 60_000),
+  };
+  const originalFindOne = TermsAcceptance.findOne;
+  const originalCreate = TermsAcceptance.create;
+  TermsAcceptance.findOne = () => ({ select: async () => existing });
+  TermsAcceptance.create = async () => { throw new Error("duplicate record created"); };
+  try {
+    const response = await callController(termsController.accept, {
+      selectedRole: "doctor",
+      termsDocumentType: terms.documentType,
+      termsVersion: terms.version,
+      termsContentHash: terms.contentHash,
+      onboardingSessionToken: sessionToken,
+      accepted: true,
+      readToEnd: true,
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.alreadyAccepted, true);
+    assert.equal(response.body.acceptanceToken, sessionToken);
+  } finally {
+    TermsAcceptance.findOne = originalFindOne;
+    TermsAcceptance.create = originalCreate;
+  }
+});
+
+test("acceptance endpoint refuses an expired onboarding session", async () => {
+  const terms = getCurrentTerms("laboratory");
+  const sessionToken = "L".repeat(43);
+  const existing = {
+    selectedRole: "laboratory",
+    termsDocumentType: terms.documentType,
+    termsVersion: terms.version,
+    termsContentHash: terms.contentHash,
+    acceptanceStatus: "ACCEPTED",
+    acceptedAt: new Date(Date.now() - 60_000),
+    expiresAt: new Date(Date.now() - 1),
+  };
+  const originalFindOne = TermsAcceptance.findOne;
+  TermsAcceptance.findOne = () => ({ select: async () => existing });
+  try {
+    const response = await callController(termsController.accept, {
+      selectedRole: "laboratory",
+      termsDocumentType: terms.documentType,
+      termsVersion: terms.version,
+      termsContentHash: terms.contentHash,
+      onboardingSessionToken: sessionToken,
+      accepted: true,
+      readToEnd: true,
+    });
+    assert.equal(response.status, 410);
+    assert.equal(response.body.code, "ONBOARDING_SESSION_EXPIRED");
+  } finally {
+    TermsAcceptance.findOne = originalFindOne;
   }
 });
 
