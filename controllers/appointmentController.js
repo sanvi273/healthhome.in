@@ -2220,13 +2220,15 @@ exports.checkReadyConsultation =
       const activeCall = patient ? await VideoCallSession.findOne({
         appointmentId: appointment._id,
         patientId: patient._id,
-        status: { $in: ["ACCEPTED", "CONNECTED"] },
+        status: { $in: ["RINGING", "ACCEPTED", "CONNECTED"] },
         expiresAt: { $gt: new Date() },
-      }).select("callId channelName status").lean() : null;
+      }).select("callId channelName status expiresAt").lean() : null;
       if (!activeCall) return res.json({ success: true, appointment: null });
       const readyAppointment = appointment.toObject();
       readyAppointment.callId = activeCall.callId;
       readyAppointment.meetingId = activeCall.channelName;
+      readyAppointment.callStatus = activeCall.status;
+      readyAppointment.callExpiresAt = activeCall.expiresAt;
       return res.json({ success: true, appointment: readyAppointment });
 
     } catch (error) {

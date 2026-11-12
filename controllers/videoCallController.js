@@ -177,7 +177,15 @@ exports.active = async (req, res) => {
   try {
     const field = req.user.role === "doctor" ? "doctorId" : "patientId";
     const calls = await VideoCallSession.find({ [field]: req.user.id, status: { $in: activeStatuses }, expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).limit(10).lean();
-    return res.json({ success: true, calls: calls.map(publicCall) });
+    const enrichedCalls = await Promise.all(calls.map(async (call) => {
+      const result = publicCall(call);
+      if (req.user.role === "patient") {
+        const appointment = await Appointment.findById(call.appointmentId).select("doctorName").lean();
+        result.doctorName = appointment?.doctorName || "Your doctor";
+      }
+      return result;
+    }));
+    return res.json({ success: true, calls: enrichedCalls });
   } catch (error) { return res.status(500).json({ success: false, message: "Unable to load active calls." }); }
 };
 
