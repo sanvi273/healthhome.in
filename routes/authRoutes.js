@@ -2,7 +2,7 @@ const express = require("express");
 
 console.log("✅ authRoutes.js loaded");
 
-const { updateOneSignalId } = require("../controllers/authController");
+const { updateOneSignalId, loginUser } = require("../controllers/authController");
 
 const { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword } = require("../controllers/authOtpController");
 
@@ -24,7 +24,7 @@ router.post("/register/verify", verifyRegistration);
 
 router.post(
     "/login",
-    initiateLogin
+    loginUser
 );
 
 router.post("/login/initiate", initiateLogin);

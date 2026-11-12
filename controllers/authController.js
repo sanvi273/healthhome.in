@@ -1,5 +1,11 @@
 
 const User = require("../models/user");
+const {
+    getCurrentTerms,
+    findAcceptanceToken,
+    hasCurrentAcceptance,
+    associateAcceptance,
+} = require("../services/termsAcceptanceService");
 const Verification = require("../models/verification");
 const VerificationCounter = require("../models/verificationCounter");
 const bcrypt = require("bcryptjs");
@@ -300,6 +306,8 @@ const loginUser = async (req, res) => {
         const {
             phone,
             password,
+            role,
+            termsAcceptanceToken,
         } = req.body;
 
         // VALIDATE
@@ -311,8 +319,14 @@ const loginUser = async (req, res) => {
         }
 
         // FIND USER BY PHONE
+        const normalizedRole = String(role || "").trim().toLowerCase();
+        if (!["patient", "doctor", "laboratory", "pharmacy", "admin"].includes(normalizedRole)) {
+            return res.status(400).json({ success: false, message: "Please select a valid account role." });
+        }
+
         const user = await User.findOne({
             phone: String(phone).trim(),
+            role: normalizedRole,
         });
 
         if (!user) {
@@ -343,6 +357,25 @@ const loginUser = async (req, res) => {
                     ? `Your account has been suspended. Reason: ${user.suspensionReason}`
                     : "Your account has been suspended. Please contact HealthHome support.",
             });
+        }
+
+        if (normalizedRole !== "admin") {
+            const currentTerms = getCurrentTerms(normalizedRole);
+            if (!await hasCurrentAcceptance(user._id, normalizedRole, currentTerms)) {
+                const acceptance = await findAcceptanceToken(
+                    termsAcceptanceToken,
+                    normalizedRole,
+                    currentTerms,
+                    user._id,
+                );
+                if (!acceptance || !await associateAcceptance(acceptance._id, user._id, normalizedRole, currentTerms)) {
+                    return res.status(428).json({
+                        success: false,
+                        code: "TERMS_ACCEPTANCE_REQUIRED",
+                        message: "Please review and accept the current terms for this role before signing in.",
+                    });
+                }
+            }
         }
 
         // PROFESSIONAL STATUS
