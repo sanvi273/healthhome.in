@@ -22,7 +22,13 @@ test("current terms API documents are separate and role-specific", () => {
     assert.equal(terms.documentType, documentType);
     assert.match(terms.title, /HealthHome/);
     assert.match(terms.content, /^1\. /);
-    assert.equal(terms.contentHash, crypto.createHash("sha256").update(terms.content, "utf8").digest("hex"));
+    assert.equal(terms.version, "2.0.0");
+    assert.ok(terms.metadata.length >= 4);
+    assert.equal(terms.contentHash, crypto.createHash("sha256").update(JSON.stringify({
+      title: terms.title,
+      metadata: terms.metadata,
+      content: terms.content,
+    }), "utf8").digest("hex"));
   }
   assert.equal(getCurrentTerms("admin"), null);
 });
@@ -122,6 +128,7 @@ test("acceptance endpoint stores the exact current role, version and content has
     assert.equal(record.termsDocumentType, terms.documentType);
     assert.equal(record.termsVersion, terms.version);
     assert.equal(record.termsContentHash, terms.contentHash);
+    assert.deepEqual(record.documentMetadata, terms.metadata);
     assert.deepEqual(record.businessDetails, terms.businessDetails);
     assert.deepEqual(record.policyVersion, terms.policyVersion);
     assert.equal(record.acceptanceTokenHash, acceptanceTokenHash(sessionToken));

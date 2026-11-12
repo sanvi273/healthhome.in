@@ -39,7 +39,12 @@ function getCurrentTerms(roleValue) {
     title: document.title,
     version: document.version,
     content: document.content,
-    contentHash: crypto.createHash("sha256").update(document.content, "utf8").digest("hex"),
+    metadata: document.metadata,
+    contentHash: crypto.createHash("sha256").update(JSON.stringify({
+      title: document.title,
+      metadata: document.metadata,
+      content: document.content,
+    }), "utf8").digest("hex"),
     policyVersion: policyVersions(),
     businessDetails: businessDetails(),
   };

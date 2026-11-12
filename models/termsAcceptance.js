@@ -6,6 +6,7 @@ const termsAcceptanceSchema = new mongoose.Schema({
   termsDocumentType: { type: String, required: true },
   termsVersion: { type: String, required: true },
   termsContentHash: { type: String, required: true },
+  documentMetadata: [{ label: String, value: String }],
   policyVersion: {
     privacy: { type: String, required: true },
     refundCancellation: { type: String, required: true },
