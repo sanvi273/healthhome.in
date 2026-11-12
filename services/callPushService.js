@@ -27,7 +27,9 @@ async function sendToUser(userId, payload) {
   const response = await messaging.sendEachForMulticast({
     tokens: devices.map((device) => device.deviceToken),
     data: Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value ?? "")])),
-    android: { priority: "high", ttl: 45000, notification: { channelId: "incoming_calls", sound: "default", defaultVibrateTimings: true } },
+    // Data-only high-priority delivery lets the Flutter background handler
+    // create a full-screen call notification with Answer/Decline UI.
+    android: { priority: "high", ttl: 45000, collapseKey: `healthhome-call-${payload.callId || payload.appointmentId || "incoming"}` },
     apns: { headers: { "apns-priority": "10", "apns-push-type": "alert", "apns-expiration": String(Math.floor(Date.now() / 1000) + 45) }, payload: { aps: { alert: { title: "Incoming video consultation", body: "Your doctor is ready to consult." }, sound: "default", category: "INCOMING_CALL", "content-available": 1 } } },
   });
   const invalid = [];
