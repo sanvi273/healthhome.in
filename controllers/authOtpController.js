@@ -49,22 +49,44 @@ function allowIp(ip) {
   return entry.count <= 30;
 }
 
-async function msg91(path, payload) {
+async function msg91(path, payload, { otpVerification = false } = {}) {
   const authKey = process.env.MSG91_AUTH_KEY;
   const widgetId = process.env.MSG91_WIDGET_ID;
-  const widgetToken = process.env.MSG91_WIDGET_TOKEN;
-  if (!authKey || !widgetId || !widgetToken) throw new Error("OTP_PROVIDER_NOT_CONFIGURED");
-  const response = await fetch(`${MSG91}/${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json", tokenAuth: widgetToken },
-    body: JSON.stringify({ widgetId, ...payload }),
-    signal: AbortSignal.timeout(10000),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.type !== "success" || data.code === 201) {
+  if (!authKey || !widgetId) throw new Error("OTP_PROVIDER_NOT_CONFIGURED");
+  try {
+    const response = await fetch(`${MSG91}/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json", authkey: authKey },
+      body: JSON.stringify({ widgetId, ...payload }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.type !== "success" || data.code === 201) {
+      if (otpVerification && response.ok) throw new Error("OTP_TOKEN_INVALID");
+      console.error("MSG91 widget request rejected", {
+        path,
+        status: response.status,
+        providerCode: String(data.code || data.type || "unknown").slice(0, 32),
+      });
+      throw new Error("OTP_PROVIDER_FAILURE");
+    }
+    return data;
+  } catch (error) {
+    if (error.message === "OTP_PROVIDER_FAILURE") throw error;
+    console.error("MSG91 widget request failed", { path, errorType: error.name || "NetworkError" });
     throw new Error("OTP_PROVIDER_FAILURE");
   }
-  return data;
+}
+
+async function verifyChallengeWithMsg91(challenge, { otp, accessToken }) {
+  if (typeof accessToken === "string" && accessToken.length > 0) {
+    return verifyWidgetAccessToken(accessToken);
+  }
+  if (typeof otp !== "string" || !/^\d{6}$/.test(otp)) throw new Error("OTP_TOKEN_INVALID");
+  const result = await msg91("verifyOtp", { reqId: challenge.msg91RequestId, otp }, { otpVerification: true });
+  const token = result.message || result["access-token"] || result.accessToken;
+  if (typeof token !== "string" || token.length === 0) throw new Error("OTP_TOKEN_INVALID");
+  return verifyWidgetAccessToken(token);
 }
 
 async function verifyWidgetAccessToken(token) {
@@ -161,15 +183,16 @@ const initiateLogin = async (req, res) => {
 const verifyLogin = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
-    const { challengeId, accessToken } = req.body;
-    if (typeof challengeId !== "string" || typeof accessToken !== "string" || accessToken.length > 4096) {
+    const { challengeId, accessToken, otp } = req.body;
+    if (typeof challengeId !== "string" ||
+      !(typeof accessToken === "string" && accessToken.length <= 4096) && typeof otp !== "string") {
       return res.status(400).json({ success: false, message: "Invalid verification request." });
     }
     const challenge = await AuthChallenge.findOne({ challengeId, purpose: "login", consumedAt: null, verifiedAt: null });
     if (!challenge || challenge.expiresAt <= new Date()) return res.status(400).json({ success: false, message: "Verification expired. Please sign in again." });
     await countVerificationAttempt(challenge);
-    const providerResult = await verifyWidgetAccessToken(accessToken);
-    const verifiedPhone = normalizePhone(providerResult.identifier || providerResult.data?.identifier || providerResult.data?.mobile || providerResult.mobile);
+    const providerResult = await verifyChallengeWithMsg91(challenge, { otp, accessToken });
+    const verifiedPhone = normalizePhone(providerResult.identifier || providerResult.data?.identifier || providerResult.data?.mobile || providerResult.mobile || providerResult.message);
     if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
     const user = await User.findById(challenge.userId);
     if (!user || user.accountStatus === "SUSPENDED" || user.role !== challenge.role) return res.status(401).json({ success: false, message: "Unable to sign in with those details." });
@@ -204,7 +227,7 @@ const initiateRegistration = async (req, res) => {
     if (!name || !normalizedEmail || !password || !normalizedPhone || !["patient", "doctor", "laboratory", "pharmacy"].includes(normalizedRole) || !label || !fullAddress || !city || !state || !/^\d{6}$/.test(String(pincode || ""))) {
       return res.status(400).json({ success: false, message: "Please complete all required registration fields." });
     }
-    if (String(password).length < 8 || String(password).length > 128) return res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
+    if (String(password).length < 6 || String(password).length > 128) return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
     const exists = await User.findOne({ $or: [{ email: normalizedEmail }, { phone: phoneQuery(normalizedPhone) }] }).select("_id").lean();
     if (exists) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
@@ -228,13 +251,14 @@ const initiateRegistration = async (req, res) => {
 const verifyRegistration = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
-    const { challengeId, accessToken } = req.body;
-    if (typeof challengeId !== "string" || typeof accessToken !== "string" || accessToken.length > 4096) return res.status(400).json({ success: false, message: "Invalid verification request." });
+    const { challengeId, accessToken, otp } = req.body;
+    if (typeof challengeId !== "string" ||
+      !(typeof accessToken === "string" && accessToken.length <= 4096) && typeof otp !== "string") return res.status(400).json({ success: false, message: "Invalid verification request." });
     const challenge = await AuthChallenge.findOne({ challengeId, purpose: "register", consumedAt: null, verifiedAt: null });
     if (!challenge || challenge.expiresAt <= new Date() || !challenge.registrationData) return res.status(400).json({ success: false, message: "Verification expired. Please register again." });
     await countVerificationAttempt(challenge);
-    const result = await verifyWidgetAccessToken(accessToken);
-    const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile);
+    const result = await verifyChallengeWithMsg91(challenge, { otp, accessToken });
+    const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile || result.message);
     if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
     const data = challenge.registrationData;
     const consumed = await AuthChallenge.findOneAndUpdate(
@@ -295,13 +319,14 @@ const initiateForgotPassword = async (req, res) => {
 const verifyResetOtp = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
-    const { challengeId, accessToken } = req.body;
-    if (typeof challengeId !== "string" || typeof accessToken !== "string" || accessToken.length > 4096) return res.status(400).json({ success: false, message: "Invalid verification request." });
+    const { challengeId, accessToken, otp } = req.body;
+    if (typeof challengeId !== "string" ||
+      !(typeof accessToken === "string" && accessToken.length <= 4096) && typeof otp !== "string") return res.status(400).json({ success: false, message: "Invalid verification request." });
     const challenge = await AuthChallenge.findOne({ challengeId, purpose: "reset", consumedAt: null, verifiedAt: null });
     if (!challenge || challenge.expiresAt <= new Date()) return res.status(400).json({ success: false, message: "Verification expired. Please start again." });
     await countVerificationAttempt(challenge);
-    const result = await verifyWidgetAccessToken(accessToken);
-    const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile);
+    const result = await verifyChallengeWithMsg91(challenge, { otp, accessToken });
+    const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile || result.message);
     if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
     const user = await User.findById(challenge.userId);
     if (!user || user.accountStatus === "SUSPENDED") return res.status(400).json({ success: false, message: "Verification could not be completed." });
@@ -370,4 +395,4 @@ const resendLogin = async (req, res) => {
   }
 };
 
-module.exports = { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword, createChallenge, normalizePhone, verifyWidgetAccessToken };
+module.exports = { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword, createChallenge, normalizePhone, msg91, verifyWidgetAccessToken };
