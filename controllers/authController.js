@@ -470,4 +470,5 @@ module.exports = {
     registerUser,
     loginUser,
     updateOneSignalId,
+    generateVerificationId,
 };

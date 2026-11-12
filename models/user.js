@@ -101,6 +101,11 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    passwordChangedAt: {
+      type: Date,
+      default: null,
+    },
+
 
     // ==========================================================
     // ROLE

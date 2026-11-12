@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const User = require("../models/user");
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   try {
     // Get Authorization header
     const authHeader = req.headers.authorization;
@@ -35,6 +36,12 @@ const authMiddleware = (req, res, next) => {
       token,
       process.env.JWT_SECRET
     );
+
+    const user = await User.findById(decoded.id).select("passwordChangedAt accountStatus").lean();
+    if (!user || user.accountStatus === "SUSPENDED" ||
+      (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime())) {
+      return res.status(401).json({ success: false, message: "Session is no longer valid. Please sign in again." });
+    }
 
     // Store authenticated user information
     req.user = {
