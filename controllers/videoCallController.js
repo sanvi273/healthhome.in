@@ -119,14 +119,18 @@ exports.start = async (req, res) => {
           await VideoCallSession.updateOne({ _id: call._id }, { $unset: { pushSentAt: 1 } });
         }
       } catch (error) {
-        console.error("INCOMING CALL PUSH ERROR:", error.message);
+        const code = error.code || error.errorInfo?.code || "unknown";
+        console.error("INCOMING CALL PUSH ERROR:", { code, message: error.message });
         await VideoCallSession.updateOne({ _id: call._id }, { $unset: { pushSentAt: 1 } });
-        const credentialError = /credential|default app|private key|service account/i.test(error.message || "");
+        const credentialError = /credential|default app|private key|service account/i.test(error.message || "") || code === "app/invalid-credential";
         push = {
           delivered: 0,
-          reason: credentialError
-            ? "Firebase Admin credentials are missing or invalid on the backend."
-            : "Firebase could not deliver the call push. Check backend logs and the patient device registration.",
+          errorCode: code,
+          reason: code === "messaging/mismatched-credential"
+            ? "Firebase Admin key belongs to a different Firebase project than the patient app."
+            : credentialError
+              ? "Firebase Admin credentials are missing or invalid on the backend."
+              : `Firebase push failed (${code}). Check Render logs and patient device registration.`,
         };
       }
     }

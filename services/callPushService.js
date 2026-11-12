@@ -23,8 +23,9 @@ function getMessaging() {
 async function sendToUser(userId, payload) {
   const devices = await DeviceRegistration.find({ userId }).select("deviceToken").lean();
   if (!devices.length) return { delivered: 0, reason: "No registered devices" };
-  const messaging = getMessaging();
-  const response = await messaging.sendEachForMulticast({
+  try {
+    const messaging = getMessaging();
+    const response = await messaging.sendEachForMulticast({
     tokens: devices.map((device) => device.deviceToken),
     data: Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value ?? "")])),
     // Include a native Android notification as well as data. Android can show
@@ -48,13 +49,28 @@ async function sendToUser(userId, payload) {
       } : undefined,
     },
     apns: { headers: { "apns-priority": "10", "apns-push-type": "alert", "apns-expiration": String(Math.floor(Date.now() / 1000) + 45) }, payload: { aps: { alert: { title: "Incoming video consultation", body: "Your doctor is ready to consult." }, sound: "default", category: "INCOMING_CALL", "content-available": 1 } } },
-  });
-  const invalid = [];
-  response.responses.forEach((result, index) => {
-    if (!result.success && ["messaging/invalid-registration-token", "messaging/registration-token-not-registered"].includes(result.error?.code)) invalid.push(devices[index].deviceToken);
-  });
-  if (invalid.length) await DeviceRegistration.deleteMany({ deviceToken: { $in: invalid } });
-  return { delivered: response.successCount, failed: response.failureCount };
+    });
+    const invalid = [];
+    const errors = new Set();
+    response.responses.forEach((result, index) => {
+      if (result.success) return;
+      const code = result.error?.code || "messaging/unknown-error";
+      errors.add(code);
+      console.error("FCM device delivery failed", { code, message: result.error?.message });
+      if (["messaging/invalid-registration-token", "messaging/registration-token-not-registered"].includes(code)) invalid.push(devices[index].deviceToken);
+    });
+    if (invalid.length) await DeviceRegistration.deleteMany({ deviceToken: { $in: invalid } });
+    const errorCodes = [...errors];
+    return {
+      delivered: response.successCount,
+      failed: response.failureCount,
+      ...(errorCodes.length ? { errorCodes } : {}),
+      ...(!response.successCount ? { reason: errorCodes.join(", ") || "FCM did not accept any patient device tokens" } : {}),
+    };
+  } catch (error) {
+    console.error("FCM call push request failed", { code: error.code || error.errorInfo?.code, message: error.message });
+    throw error;
+  }
 }
 
 module.exports = { sendToUser };
