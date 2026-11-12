@@ -7,6 +7,7 @@ const authChallengeSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   role: { type: String, default: "" },
   registrationData: { type: mongoose.Schema.Types.Mixed, default: null },
+  termsAcceptanceId: { type: mongoose.Schema.Types.ObjectId, ref: "TermsAcceptance", default: null },
   msg91RequestId: { type: String, required: true },
   expiresAt: { type: Date, required: true, index: { expires: 0 } },
   resendCount: { type: Number, default: 0 },

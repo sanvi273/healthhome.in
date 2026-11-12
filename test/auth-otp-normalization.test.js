@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizePhone, msg91 } = require("../controllers/authOtpController");
+const { normalizePhone, msg91, verifyWidgetAccessToken } = require("../controllers/authOtpController");
 
 test("authentication phone normalization supports Indian local and E.164 input", () => {
   assert.equal(normalizePhone("98765 43210"), "919876543210");
@@ -36,5 +36,28 @@ test("MSG91 Widget requests use the existing backend Auth Key, not a missing ext
     else process.env.MSG91_AUTH_KEY = originalAuthKey;
     if (originalWidgetId === undefined) delete process.env.MSG91_WIDGET_ID;
     else process.env.MSG91_WIDGET_ID = originalWidgetId;
+  }
+});
+
+test("MSG91 Widget access-token validation sends Auth Key in the documented header", async () => {
+  const originalFetch = global.fetch;
+  const originalAuthKey = process.env.MSG91_AUTH_KEY;
+  let captured;
+  process.env.MSG91_AUTH_KEY = "unit-test-auth-key";
+  global.fetch = async (url, options) => {
+    captured = { url, options };
+    return { ok: true, status: 200, json: async () => ({ type: "success", identifier: "919876543210" }) };
+  };
+  try {
+    const result = await verifyWidgetAccessToken("unit-test-access-token");
+    assert.equal(result.type, "success");
+    assert.match(captured.url, /\/widget\/verifyAccessToken$/);
+    assert.equal(captured.options.headers.authkey, "unit-test-auth-key");
+    assert.equal(new URLSearchParams(captured.options.body).get("access-token"), "unit-test-access-token");
+    assert.equal(new URLSearchParams(captured.options.body).has("authkey"), false);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalAuthKey === undefined) delete process.env.MSG91_AUTH_KEY;
+    else process.env.MSG91_AUTH_KEY = originalAuthKey;
   }
 });

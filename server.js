@@ -26,6 +26,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const videoCallRoutes = require("./routes/videoCallRoutes");
+const termsRoutes = require("./routes/termsRoutes");
 const VideoCallSession = require("./models/VideoCallSession");
 
 // ============================================================
@@ -83,6 +84,8 @@ app.use(
   "/api/auth",
   authRoutes
 );
+
+app.use("/api/terms", termsRoutes);
 
 // ============================================================
 // DOCTOR ROUTES

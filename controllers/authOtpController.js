@@ -6,6 +6,13 @@ const AuthChallenge = require("../models/authChallenge");
 const AuthRateLimit = require("../models/authRateLimit");
 const Verification = require("../models/verification");
 const { generateVerificationId } = require("./authController");
+const {
+  getCurrentTerms,
+  findAcceptanceToken,
+  findAcceptanceById,
+  hasCurrentAcceptance,
+  associateAcceptance,
+} = require("../services/termsAcceptanceService");
 
 const MSG91 = "https://control.msg91.com/api/v5/widget";
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -94,8 +101,12 @@ async function verifyWidgetAccessToken(token) {
   if (!authKey) throw new Error("OTP_PROVIDER_NOT_CONFIGURED");
   const response = await fetch(`${MSG91}/verifyAccessToken`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams({ authkey: authKey, "access-token": token }),
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      authkey: authKey,
+    },
+    body: new URLSearchParams({ "access-token": token }),
     signal: AbortSignal.timeout(10000),
   });
   const data = await response.json().catch(() => ({}));
@@ -105,7 +116,7 @@ async function verifyWidgetAccessToken(token) {
   return data;
 }
 
-async function createChallenge({ purpose, phone, user, role, registrationData, ip, skipPhoneRateLimit = false }) {
+async function createChallenge({ purpose, phone, user, role, registrationData, termsAcceptanceId, ip, skipPhoneRateLimit = false }) {
   if (!skipPhoneRateLimit) await incrementRateLimit("phone", phone, 5);
   if (ip) await incrementRateLimit("ip", String(ip).slice(0, 64), 30);
   const request = await msg91("sendOtp", { identifier: phone });
@@ -118,6 +129,7 @@ async function createChallenge({ purpose, phone, user, role, registrationData, i
     userId: user?._id || null,
     role: role || user?.role || "",
     registrationData: registrationData || null,
+    termsAcceptanceId: termsAcceptanceId || null,
     msg91RequestId: requestId,
     expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
     lastSentAt: now,
@@ -169,7 +181,16 @@ const initiateLogin = async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password)) || user.accountStatus === "SUSPENDED") {
       return res.status(401).json({ success: false, message: "Unable to sign in with those details." });
     }
-    const challengeId = await createChallenge({ purpose: "login", phone, user, ip: req.ip });
+    let termsAcceptanceId = null;
+    if (role !== "admin") {
+      const terms = getCurrentTerms(role);
+      if (!await hasCurrentAcceptance(user._id, role, terms)) {
+        const acceptance = await findAcceptanceToken(req.body.termsAcceptanceToken, role, terms, user._id);
+        if (!acceptance) return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms for this role before signing in." });
+        termsAcceptanceId = acceptance._id;
+      }
+    }
+    const challengeId = await createChallenge({ purpose: "login", phone, user, termsAcceptanceId, ip: req.ip });
     const challenge = await AuthChallenge.findOne({ challengeId }).select("msg91RequestId").lean();
     return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "If the details are valid, a verification code has been sent." });
   } catch (error) {
@@ -196,6 +217,13 @@ const verifyLogin = async (req, res) => {
     if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
     const user = await User.findById(challenge.userId);
     if (!user || user.accountStatus === "SUSPENDED" || user.role !== challenge.role) return res.status(401).json({ success: false, message: "Unable to sign in with those details." });
+    if (user.role !== "admin") {
+      const terms = getCurrentTerms(user.role);
+      const accepted = challenge.termsAcceptanceId
+        ? await associateAcceptance(challenge.termsAcceptanceId, user._id, user.role, terms)
+        : await hasCurrentAcceptance(user._id, user.role, terms);
+      if (!accepted) return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms for this role before signing in." });
+    }
     const consumed = await AuthChallenge.findOneAndUpdate(
       { _id: challenge._id, consumedAt: null, verifiedAt: null, expiresAt: { $gt: new Date() } },
       { $set: { verifiedAt: new Date(), consumedAt: new Date() } },
@@ -220,7 +248,7 @@ const verifyLogin = async (req, res) => {
 const initiateRegistration = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return res.status(429).json({ success: false, message: "Please try again later." });
-    const { name, email, password, role, phone, label, fullAddress, landmark, city, state, pincode, latitude, longitude } = req.body;
+    const { name, email, password, role, phone, label, fullAddress, landmark, city, state, pincode, latitude, longitude, termsAcceptanceToken } = req.body;
     const normalizedPhone = normalizePhone(phone);
     const normalizedEmail = String(email || "").trim().toLowerCase();
     const normalizedRole = String(role || "").trim().toLowerCase();
@@ -229,6 +257,9 @@ const initiateRegistration = async (req, res) => {
     }
     if (String(password).length < 6 || String(password).length > 128) return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
+    const currentTerms = getCurrentTerms(normalizedRole);
+    const termsAcceptance = await findAcceptanceToken(termsAcceptanceToken, normalizedRole, currentTerms);
+    if (!termsAcceptance) return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms for this role before registering." });
     const exists = await User.findOne({ $or: [{ email: normalizedEmail }, { phone: phoneQuery(normalizedPhone) }] }).select("_id").lean();
     if (exists) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
     const registrationData = {
@@ -237,7 +268,7 @@ const initiateRegistration = async (req, res) => {
       city: String(city).trim(), state: String(state).trim(), pincode: String(pincode).trim(),
       latitude: latitude == null || latitude === "" ? null : Number(latitude), longitude: longitude == null || longitude === "" ? null : Number(longitude),
     };
-    const challengeId = await createChallenge({ purpose: "register", phone: normalizedPhone, role: normalizedRole, registrationData, ip: req.ip });
+    const challengeId = await createChallenge({ purpose: "register", phone: normalizedPhone, role: normalizedRole, registrationData, termsAcceptanceId: termsAcceptance._id, ip: req.ip });
     const challenge = await AuthChallenge.findOne({ challengeId }).select("msg91RequestId").lean();
     return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "Verification code sent." });
   } catch (error) {
@@ -261,6 +292,10 @@ const verifyRegistration = async (req, res) => {
     const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile || result.message);
     if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
     const data = challenge.registrationData;
+    const currentTerms = getCurrentTerms(data.role);
+    if (!await findAcceptanceById(challenge.termsAcceptanceId, data.role, currentTerms, { requireUnassigned: true })) {
+      return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "The accepted terms have changed or expired. Please review the current terms and register again." });
+    }
     const consumed = await AuthChallenge.findOneAndUpdate(
       { _id: challenge._id, consumedAt: null, verifiedAt: null, expiresAt: { $gt: new Date() } },
       { $set: { verifiedAt: new Date(), consumedAt: new Date() } },
@@ -283,6 +318,12 @@ const verifyRegistration = async (req, res) => {
         await User.findByIdAndDelete(user._id);
         throw error;
       }
+    }
+    const acceptanceLinked = await associateAcceptance(challenge.termsAcceptanceId, user._id, data.role, currentTerms);
+    if (!acceptanceLinked) {
+      if (professional) await Verification.deleteOne({ userId: user._id, verificationId });
+      await User.findByIdAndDelete(user._id);
+      return res.status(409).json({ success: false, message: "Unable to link your terms acceptance. Please accept the current terms and register again." });
     }
     return res.status(201).json({ success: true, message: professional ? "Registration submitted. Your account is pending verification." : "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, accountStatus: user.accountStatus, verificationStatus: user.verificationStatus, verificationId: user.verificationId } });
   } catch (error) {
