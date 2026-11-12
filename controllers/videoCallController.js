@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const Appointment = require("../models/Appointment");
+const Doctor = require("../models/doctor");
 const User = require("../models/user");
 const VideoCallSession = require("../models/VideoCallSession");
 const DeviceRegistration = require("../models/DeviceRegistration");
@@ -9,6 +10,10 @@ const { sendToUser } = require("../services/callPushService");
 const { RtcTokenBuilder, RtcRole } = require("agora-token");
 
 const activeStatuses = ["INITIATED", "RINGING", "ACCEPTED", "CONNECTED"];
+const normalizePhone = (value) => {
+  const digits = String(value || "").replace(/\D/g, "").replace(/^0+/, "");
+  return /^91[6-9]\d{9}$/.test(digits) ? digits.slice(2) : digits;
+};
 const publicCall = (call) => ({
   callId: call.callId,
   appointmentId: String(call.appointmentId),
@@ -70,7 +75,18 @@ exports.start = async (req, res) => {
     if (!mongoose.isValidObjectId(appointmentId)) return res.status(400).json({ success: false, message: "A valid appointmentId is required." });
     const appointment = await Appointment.findById(appointmentId);
     if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
-    if (String(appointment.doctorId) !== String(req.user.id)) return res.status(403).json({ success: false, message: "This appointment belongs to another doctor." });
+    const [doctorProfile, authenticatedDoctor] = await Promise.all([
+      Doctor.findById(appointment.doctorId).select("userId phone").lean(),
+      User.findById(req.user.id).select("phone").lean(),
+    ]);
+    const profileUserMatches = doctorProfile?.userId && String(doctorProfile.userId) === String(req.user.id);
+    const legacyPhoneMatches = doctorProfile && authenticatedDoctor &&
+      normalizePhone(doctorProfile.phone) !== "" &&
+      normalizePhone(doctorProfile.phone) === normalizePhone(authenticatedDoctor.phone);
+    const directUserIdMatches = String(appointment.doctorId) === String(req.user.id);
+    if (!directUserIdMatches && !profileUserMatches && !legacyPhoneMatches) {
+      return res.status(403).json({ success: false, message: "This appointment belongs to another doctor." });
+    }
     if (appointment.consultationType !== "Video Consultation" || ["Cancelled", "Rejected", "Completed"].includes(appointment.status)) {
       return res.status(409).json({ success: false, message: "This appointment is not eligible for a video consultation." });
     }
