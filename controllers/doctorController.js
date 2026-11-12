@@ -177,7 +177,7 @@ const getDoctors = async (req, res) => {
       role: "doctor",
       verificationStatus: "APPROVED",
       accountStatus: "ACTIVE",
-    }).select("_id phone").lean();
+    }).select("_id phone");
 
     if (approvedUsers.length === 0) {
       return res.status(200).json({ success: true, doctors: [] });
@@ -193,10 +193,7 @@ const getDoctors = async (req, res) => {
         { userId: { $in: approvedUserIds } },
         { phone: { $in: approvedPhones } },
       ],
-    })
-      .select("_id userId name phone specialization experience fees hospital about isAvailable workingDays startTime endTime breakStart breakEnd slotDurationMinutes maxAppointmentsPerDay createdAt updatedAt")
-      .sort({ createdAt: -1 })
-      .lean();
+    }).sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
