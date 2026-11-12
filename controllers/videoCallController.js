@@ -115,9 +115,19 @@ exports.start = async (req, res) => {
     if (shouldSendPush) {
       try {
         push = await sendToUser(patient._id, { type: "incoming_call", callId: call.callId, appointmentId: String(appointment._id), doctorName: doctor?.name || appointment.doctorName, doctorImage: doctor?.profileImage || "", expiresAt: call.expiresAt.toISOString() });
+        if (!push.delivered) {
+          await VideoCallSession.updateOne({ _id: call._id }, { $unset: { pushSentAt: 1 } });
+        }
       } catch (error) {
         console.error("INCOMING CALL PUSH ERROR:", error.message);
-        push = { delivered: 0, reason: "Push delivery is not configured" };
+        await VideoCallSession.updateOne({ _id: call._id }, { $unset: { pushSentAt: 1 } });
+        const credentialError = /credential|default app|private key|service account/i.test(error.message || "");
+        push = {
+          delivered: 0,
+          reason: credentialError
+            ? "Firebase Admin credentials are missing or invalid on the backend."
+            : "Firebase could not deliver the call push. Check backend logs and the patient device registration.",
+        };
       }
     }
     appointment.meetingId = call.channelName;
