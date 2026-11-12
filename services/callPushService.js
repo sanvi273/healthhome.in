@@ -27,9 +27,26 @@ async function sendToUser(userId, payload) {
   const response = await messaging.sendEachForMulticast({
     tokens: devices.map((device) => device.deviceToken),
     data: Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value ?? "")])),
-    // Data-only high-priority delivery lets the Flutter background handler
-    // create a full-screen call notification with Answer/Decline UI.
-    android: { priority: "high", ttl: 45000, collapseKey: `healthhome-call-${payload.callId || payload.appointmentId || "incoming"}` },
+    // Include a native Android notification as well as data. Android can show
+    // this when ColorOS delays Flutter's background isolate; tapping it opens
+    // the app with the same call data for the existing incoming-call flow.
+    notification: payload.type === "incoming_call" ? {
+      title: "Incoming video consultation",
+      body: `${payload.doctorName || "Your doctor"} is ready to consult. Tap to answer.`,
+    } : undefined,
+    android: {
+      priority: "high",
+      ttl: 45000,
+      collapseKey: `healthhome-call-${payload.callId || payload.appointmentId || "incoming"}`,
+      notification: payload.type === "incoming_call" ? {
+        channelId: "incoming_calls",
+        sound: "default",
+        priority: "max",
+        visibility: "public",
+        defaultVibrateTimings: true,
+        tag: `healthhome-call-${payload.callId || payload.appointmentId || "incoming"}`,
+      } : undefined,
+    },
     apns: { headers: { "apns-priority": "10", "apns-push-type": "alert", "apns-expiration": String(Math.floor(Date.now() / 1000) + 45) }, payload: { aps: { alert: { title: "Incoming video consultation", body: "Your doctor is ready to consult." }, sound: "default", category: "INCOMING_CALL", "content-available": 1 } } },
   });
   const invalid = [];
