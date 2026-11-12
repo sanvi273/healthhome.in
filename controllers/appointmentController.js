@@ -1,4 +1,6 @@
 const Appointment = require("../models/Appointment");
+const VideoCallSession = require("../models/VideoCallSession");
+const User = require("../models/user");
 
 const {
 
@@ -1555,11 +1557,8 @@ exports.getAppointmentById =
       }
 
       return res.json({
-
         success: true,
-
         appointment,
-
       });
 
     } catch (error) {
@@ -2216,13 +2215,19 @@ exports.checkReadyConsultation =
 
         });
 
-      return res.json({
-
-        success: true,
-
-        appointment,
-
-      });
+      if (!appointment) return res.json({ success: true, appointment: null });
+      const patient = await User.findOne({ phone: req.params.patientPhone, role: "patient" }).select("_id").lean();
+      const activeCall = patient ? await VideoCallSession.findOne({
+        appointmentId: appointment._id,
+        patientId: patient._id,
+        status: { $in: ["ACCEPTED", "CONNECTED"] },
+        expiresAt: { $gt: new Date() },
+      }).select("callId channelName status").lean() : null;
+      if (!activeCall) return res.json({ success: true, appointment: null });
+      const readyAppointment = appointment.toObject();
+      readyAppointment.callId = activeCall.callId;
+      readyAppointment.meetingId = activeCall.channelName;
+      return res.json({ success: true, appointment: readyAppointment });
 
     } catch (error) {
 
@@ -2548,6 +2553,28 @@ exports.generateAgoraToken =
 
       // ========================================================
 
+      const activeCall = await VideoCallSession.findOne({
+        appointmentId: appointment._id,
+        status: { $in: ["RINGING", "ACCEPTED", "CONNECTED"] },
+        expiresAt: { $gt: new Date() },
+      });
+      if (!activeCall) {
+        return res.status(409).json({ success: false, message: "There is no active video call for this appointment." });
+      }
+      const requestUserId = String(req.user.id);
+      const isDoctorParticipant = req.user.role === "doctor" && requestUserId === String(activeCall.doctorId);
+      let isPatientParticipant = req.user.role === "patient" && requestUserId === String(activeCall.patientId);
+      if (!isPatientParticipant && req.user.role === "patient" && !appointment.patientId) {
+        const participant = await User.findById(req.user.id).select("phone").lean();
+        isPatientParticipant = Boolean(participant?.phone && participant.phone === appointment.patientPhone);
+      }
+      if (!isDoctorParticipant && !isPatientParticipant) {
+        return res.status(403).json({ success: false, message: "You are not a participant in this consultation." });
+      }
+      if (isPatientParticipant && activeCall.status === "RINGING") {
+        return res.status(409).json({ success: false, message: "Accept the incoming call before joining." });
+      }
+
       const appId =
 
         process.env.AGORA_APP_ID;
@@ -2588,11 +2615,7 @@ exports.generateAgoraToken =
 
       // ========================================================
 
-      const channelName =
-
-        appointment.meetingId ||
-
-        `healthhome-${appointment._id}`;
+      const channelName = activeCall.channelName;
 
       // ========================================================
 

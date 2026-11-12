@@ -25,6 +25,8 @@ const prescriptionRoutes = require("./routes/prescriptionRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const videoCallRoutes = require("./routes/videoCallRoutes");
+const VideoCallSession = require("./models/VideoCallSession");
 
 // ============================================================
 // APP
@@ -121,6 +123,8 @@ app.use(
   "/api/appointments",
   appointmentRoutes
 );
+
+app.use("/api/video-calls", videoCallRoutes);
 
 // ============================================================
 // ADDRESS ROUTES
@@ -264,6 +268,17 @@ mongoose
   .catch((err) => {
     console.log("❌ MongoDB Error:", err);
   });
+
+setInterval(async () => {
+  if (mongoose.connection.readyState !== 1) return;
+  const now = new Date();
+  try {
+    await VideoCallSession.updateMany({ status: "RINGING", expiresAt: { $lte: now } }, { $set: { status: "MISSED", endedAt: now }, $unset: { activeAppointmentId: 1 } });
+    await VideoCallSession.updateMany({ status: { $in: ["ACCEPTED", "CONNECTED"] }, expiresAt: { $lte: now } }, { $set: { status: "ENDED", endedAt: now }, $unset: { activeAppointmentId: 1 } });
+  } catch (error) {
+    console.error("VIDEO CALL EXPIRY CHECK ERROR:", error.message);
+  }
+}, 15000).unref();
 
 // ============================================================
 // SERVER
