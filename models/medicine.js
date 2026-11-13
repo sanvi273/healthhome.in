@@ -42,6 +42,12 @@ const medicineSchema = new mongoose.Schema(
       default: "",
     },
 
+    // Internal idempotency key for retry-safe pharmacy add requests.
+    submissionKey: {
+      type: String,
+      select: false,
+    },
+
     soldCount: {
       type: Number,
       default: 0,
@@ -55,6 +61,14 @@ const medicineSchema = new mongoose.Schema(
   {
     timestamps: true,
   }
+);
+
+medicineSchema.index(
+  { pharmacyPhone: 1, submissionKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { submissionKey: { $type: "string" } },
+  },
 );
 
 module.exports = mongoose.model(

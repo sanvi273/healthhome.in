@@ -16,8 +16,15 @@ const {
   "../controllers/medicineController"
 );
 
+const authMiddleware = require("../middleware/authMiddleware");
+const pharmacyMedicineAuth = require("../middleware/pharmacyMedicineAuth");
+const uploadMedicineImage = require("../middleware/medicineImageUpload");
+
 router.post(
   "/add",
+  authMiddleware,
+  pharmacyMedicineAuth,
+  uploadMedicineImage,
   addMedicine
 );
 
@@ -28,11 +35,16 @@ router.get(
 
 router.delete(
   "/:id",
+  authMiddleware,
+  pharmacyMedicineAuth,
   deleteMedicine
 );
 
 router.put(
   "/:id",
+  authMiddleware,
+  pharmacyMedicineAuth,
+  uploadMedicineImage,
   updateMedicine
 );
 
