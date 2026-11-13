@@ -57,8 +57,8 @@ function allowIp(ip) {
 }
 
 async function msg91(path, payload, { otpVerification = false } = {}) {
-  const authKey = process.env.MSG91_AUTH_KEY;
-  const widgetId = process.env.MSG91_WIDGET_ID;
+  const authKey = process.env.MSG91_AUTH_KEY?.trim();
+  const widgetId = process.env.MSG91_WIDGET_ID?.trim();
   if (!authKey || !widgetId) throw new Error("OTP_PROVIDER_NOT_CONFIGURED");
   try {
     const response = await fetch(`${MSG91}/${path}`, {
@@ -97,7 +97,7 @@ async function verifyChallengeWithMsg91(challenge, { otp, accessToken }) {
 }
 
 async function verifyWidgetAccessToken(token) {
-  const authKey = process.env.MSG91_AUTH_KEY;
+  const authKey = process.env.MSG91_AUTH_KEY?.trim();
   if (!authKey) throw new Error("OTP_PROVIDER_NOT_CONFIGURED");
   const response = await fetch(`${MSG91}/verifyAccessToken`, {
     method: "POST",
@@ -161,8 +161,13 @@ async function countVerificationAttempt(challenge) {
   if (!updated) throw new Error("OTP_ATTEMPTS_EXCEEDED");
 }
 
-function providerFailure(res) {
-  return res.status(503).json({ success: false, message: "OTP service is temporarily unavailable. Please try again." });
+function providerFailure(res, reason) {
+  console.error("OTP provider unavailable", {
+    reason,
+    authKeyConfigured: Boolean(process.env.MSG91_AUTH_KEY?.trim()),
+    widgetIdConfigured: Boolean(process.env.MSG91_WIDGET_ID?.trim()),
+  });
+  return res.status(503).json({ success: false, code: "OTP_PROVIDER_UNAVAILABLE", message: "Phone verification is temporarily unavailable. Please try again later." });
 }
 function rateLimited(res) {
   return res.status(429).json({ success: false, message: "Too many verification requests. Please try later." });
@@ -195,7 +200,7 @@ const initiateLogin = async (req, res) => {
     return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "If the details are valid, a verification code has been sent." });
   } catch (error) {
     if (error.message === "OTP_RATE_LIMIT") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res);
+    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res, error.message);
     console.error("LOGIN OTP INITIATION FAILED");
     return res.status(500).json({ success: false, message: "Unable to start sign-in. Please try again." });
   }
@@ -238,7 +243,7 @@ const verifyLogin = async (req, res) => {
     } });
   } catch (error) {
     if (error.message === "OTP_ATTEMPTS_EXCEEDED") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED") return providerFailure(res);
+    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED") return providerFailure(res, error.message);
     if (error.message === "OTP_TOKEN_INVALID") return res.status(401).json({ success: false, message: "Invalid or expired verification." });
     console.error("LOGIN OTP VERIFICATION FAILED");
     return res.status(500).json({ success: false, message: "Unable to verify code. Please try again." });
@@ -273,7 +278,7 @@ const initiateRegistration = async (req, res) => {
     return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "Verification code sent." });
   } catch (error) {
     if (error.message === "OTP_RATE_LIMIT") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res);
+    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res, error.message);
     console.error("REGISTRATION OTP INITIATION FAILED");
     return res.status(500).json({ success: false, message: "Unable to start registration. Please try again." });
   }
@@ -328,7 +333,7 @@ const verifyRegistration = async (req, res) => {
     return res.status(201).json({ success: true, message: professional ? "Registration submitted. Your account is pending verification." : "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, accountStatus: user.accountStatus, verificationStatus: user.verificationStatus, verificationId: user.verificationId } });
   } catch (error) {
     if (error.message === "OTP_ATTEMPTS_EXCEEDED") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED") return providerFailure(res);
+    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED") return providerFailure(res, error.message);
     if (error.message === "OTP_TOKEN_INVALID") return res.status(401).json({ success: false, message: "Invalid or expired verification." });
     console.error("REGISTRATION OTP VERIFICATION FAILED");
     return res.status(500).json({ success: false, message: "Unable to verify registration. Please try again." });
@@ -423,14 +428,14 @@ const resendLogin = async (req, res) => {
     if (elapsed < RESEND_COOLDOWN_MS) return res.status(429).json({ success: false, retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000), message: "Please wait before requesting another code." });
     if (challenge.resendCount >= MAX_RESENDS) return res.status(429).json({ success: false, message: "Resend limit reached. Please start again." });
     const data = await msg91("retryOtp", { reqId: challenge.msg91RequestId, retryChannel: 11 });
-    if (data.type !== "success") return providerFailure(res);
+    if (data.type !== "success") return providerFailure(res, "OTP_PROVIDER_FAILURE");
     challenge.resendCount += 1;
     challenge.lastSentAt = new Date();
     await challenge.save();
     return res.json({ success: true, resendCount: challenge.resendCount });
   } catch (error) {
     if (error.message === "OTP_RATE_LIMIT") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res);
+    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res, error.message);
     console.error("OTP RESEND FAILED");
     return res.status(500).json({ success: false, message: "Unable to resend code." });
   }

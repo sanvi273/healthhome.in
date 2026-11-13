@@ -6,6 +6,7 @@ const Payment = require("../models/Payment");
 const Order = require("../models/orderModel");
 const Appointment = require("../models/Appointment");
 const User = require("../models/user");
+const uploadToCloudinary = require("../utils/cloudinaryUpload");
 
 // ============================================================
 // RAZORPAY CONFIGURATION
@@ -861,13 +862,20 @@ exports.createDoctorOrder = async (req, res) => {
       });
     }
 
-    // Process any uploaded medical report files
+    // Multer keeps uploaded files in memory, so file.path is not a durable URL.
+    // Store every report in Cloudinary before saving the appointment.
     const reports = [];
     if (req.files && Array.isArray(req.files)) {
       for (const file of req.files) {
+        const upload = await uploadToCloudinary(file, "appointment_reports");
+        const fileUrl = upload?.secure_url;
+        if (typeof fileUrl !== "string" || fileUrl.trim().length === 0) {
+          throw new Error("Unable to store uploaded medical report.");
+        }
+
         reports.push({
           fileName: file.originalname || "Medical Report",
-          fileUrl: file.path || file.secure_url || "",
+          fileUrl: fileUrl.trim(),
           fileType: file.mimetype || "application/pdf",
         });
       }
