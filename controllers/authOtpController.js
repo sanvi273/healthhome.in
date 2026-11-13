@@ -161,6 +161,84 @@ async function countVerificationAttempt(challenge) {
   if (!updated) throw new Error("OTP_ATTEMPTS_EXCEEDED");
 }
 
+async function createRegisteredAccount(data, termsAcceptanceId) {
+  const currentTerms = getCurrentTerms(data.role);
+  const acceptance = await findAcceptanceById(
+    termsAcceptanceId,
+    data.role,
+    currentTerms,
+    { requireUnassigned: true },
+  );
+  if (!acceptance) {
+    const error = new Error("TERMS_ACCEPTANCE_REQUIRED");
+    error.statusCode = 428;
+    throw error;
+  }
+
+  const professional = ["doctor", "laboratory", "pharmacy"].includes(data.role);
+  const verificationId = professional ? await generateVerificationId(data.role) : "";
+  const user = await User.create({
+    name: data.name,
+    email: data.email,
+    password: data.password,
+    role: data.role,
+    phone: data.phone,
+    accountStatus: "ACTIVE",
+    verificationStatus: professional ? "PENDING" : "NOT_REQUIRED",
+    verificationId,
+    // Registration no longer claims that the supplied phone was verified.
+    addresses: [{
+      label: data.label,
+      fullAddress: data.fullAddress,
+      landmark: data.landmark,
+      city: data.city,
+      state: data.state,
+      pincode: data.pincode,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      isDefault: true,
+    }],
+  });
+
+  try {
+    if (professional) {
+      await Verification.create({
+        userId: user._id,
+        verificationId,
+        role: data.role,
+        professionalName: user.name,
+        licenseNumber: "",
+        organizationName: "",
+        address: "",
+        documents: [],
+        notes: "",
+        status: "PENDING",
+      });
+    }
+
+    const acceptanceLinked = await associateAcceptance(
+      termsAcceptanceId,
+      user._id,
+      data.role,
+      currentTerms,
+    );
+    if (!acceptanceLinked) {
+      const error = new Error("TERMS_ACCEPTANCE_LINK_FAILED");
+      error.statusCode = 409;
+      throw error;
+    }
+  } catch (error) {
+    if (professional) await Verification.deleteOne({ userId: user._id, verificationId });
+    await User.findByIdAndDelete(user._id);
+    throw error;
+  }
+
+  return {
+    user,
+    professional,
+  };
+}
+
 function providerFailure(res, reason) {
   console.error("OTP provider unavailable", {
     reason,
@@ -257,10 +335,16 @@ const initiateRegistration = async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
     const normalizedEmail = String(email || "").trim().toLowerCase();
     const normalizedRole = String(role || "").trim().toLowerCase();
-    if (!name || !normalizedEmail || !password || !normalizedPhone || !["patient", "doctor", "laboratory", "pharmacy"].includes(normalizedRole) || !label || !fullAddress || !city || !state || !/^\d{6}$/.test(String(pincode || ""))) {
+    const normalizedName = String(name || "").trim();
+    const normalizedLabel = String(label || "").trim();
+    const normalizedAddress = String(fullAddress || "").trim();
+    const normalizedCity = String(city || "").trim();
+    const normalizedState = String(state || "").trim();
+    const normalizedPincode = String(pincode || "").trim();
+    if (!normalizedName || !normalizedEmail || typeof password !== "string" || !normalizedPhone || !["patient", "doctor", "laboratory", "pharmacy"].includes(normalizedRole) || !normalizedLabel || !normalizedAddress || !normalizedCity || !normalizedState || !/^\d{6}$/.test(normalizedPincode)) {
       return res.status(400).json({ success: false, message: "Please complete all required registration fields." });
     }
-    if (String(password).length < 6 || String(password).length > 128) return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+    if (password.length < 6 || password.length > 128) return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
     const currentTerms = getCurrentTerms(normalizedRole);
     const termsAcceptance = await findAcceptanceToken(termsAcceptanceToken, normalizedRole, currentTerms);
@@ -268,18 +352,36 @@ const initiateRegistration = async (req, res) => {
     const exists = await User.findOne({ $or: [{ email: normalizedEmail }, { phone: phoneQuery(normalizedPhone) }] }).select("_id").lean();
     if (exists) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
     const registrationData = {
-      name: String(name).trim(), email: normalizedEmail, password: await bcrypt.hash(password, 10), role: normalizedRole,
-      phone: String(phone).trim(), normalizedPhone, label: String(label).trim(), fullAddress: String(fullAddress).trim(), landmark: String(landmark || "").trim(),
-      city: String(city).trim(), state: String(state).trim(), pincode: String(pincode).trim(),
+      name: normalizedName, email: normalizedEmail, password: await bcrypt.hash(password, 10), role: normalizedRole,
+      phone: String(phone).trim(), normalizedPhone, label: normalizedLabel, fullAddress: normalizedAddress, landmark: String(landmark || "").trim(),
+      city: normalizedCity, state: normalizedState, pincode: normalizedPincode,
       latitude: latitude == null || latitude === "" ? null : Number(latitude), longitude: longitude == null || longitude === "" ? null : Number(longitude),
     };
-    const challengeId = await createChallenge({ purpose: "register", phone: normalizedPhone, role: normalizedRole, registrationData, termsAcceptanceId: termsAcceptance._id, ip: req.ip });
-    const challenge = await AuthChallenge.findOne({ challengeId }).select("msg91RequestId").lean();
-    return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "Verification code sent." });
+    await incrementRateLimit("phone", normalizedPhone, 5);
+    const { user, professional } = await createRegisteredAccount(registrationData, termsAcceptance._id);
+    return res.status(201).json({
+      success: true,
+      registered: true,
+      message: professional
+        ? "Registration submitted. Your account is pending verification."
+        : "Account created successfully.",
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        accountStatus: user.accountStatus,
+        verificationStatus: user.verificationStatus,
+        verificationId: user.verificationId,
+      },
+    });
   } catch (error) {
     if (error.message === "OTP_RATE_LIMIT") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") return providerFailure(res, error.message);
-    console.error("REGISTRATION OTP INITIATION FAILED");
+    if (error.message === "TERMS_ACCEPTANCE_REQUIRED") return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms before registering." });
+    if (error.message === "TERMS_ACCEPTANCE_LINK_FAILED") return res.status(409).json({ success: false, message: "Unable to link your terms acceptance. Please accept the current terms and register again." });
+    if (error.code === 11000) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
+    console.error("REGISTRATION FAILED");
     return res.status(500).json({ success: false, message: "Unable to start registration. Please try again." });
   }
 };
