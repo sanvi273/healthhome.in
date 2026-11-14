@@ -11,6 +11,28 @@ const VerificationCounter = require("../models/verificationCounter");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
+const normalizePhoneForLookup = (input) => {
+    const value = String(input || "").trim().replace(/[\s()-]/g, "");
+    if (!/^\+?[1-9]\d{7,14}$/.test(value)) return null;
+
+    const digits = value.replace(/\D/g, "");
+    return /^[6-9]\d{9}$/.test(digits) ? `91${digits}` : digits;
+};
+
+const phoneLookupQuery = (normalizedPhone) => {
+    const variants = new Set([normalizedPhone, `+${normalizedPhone}`]);
+    if (/^91[6-9]\d{9}$/.test(normalizedPhone)) {
+        variants.add(normalizedPhone.slice(2));
+    }
+
+    const formattedVariants = [...variants].map((variant) => {
+        const digits = variant.replace(/\D/g, "");
+        return new RegExp(`^\\+?${digits.split("").join("[\\s().-]*")}$`);
+    });
+
+    return { $in: [...variants, ...formattedVariants] };
+};
+
 // ============================================================
 // GENERATE HEALTHHOME VERIFICATION ID
 // ============================================================
@@ -319,14 +341,27 @@ const loginUser = async (req, res) => {
         }
 
         // FIND USER BY PHONE
-        const normalizedRole = String(role || "").trim().toLowerCase();
+        const requestedRole = String(role || "").trim().toLowerCase();
+        const normalizedRole = requestedRole === "lab" ? "laboratory" : requestedRole;
         if (!["patient", "doctor", "laboratory", "pharmacy", "admin"].includes(normalizedRole)) {
             return res.status(400).json({ success: false, message: "Please select a valid account role." });
         }
 
+        const normalizedPhone = normalizePhoneForLookup(phone);
+        if (!normalizedPhone) {
+            return res.status(400).json({
+                success: false,
+                message: "Please enter a valid phone number.",
+            });
+        }
+
+        const roleVariants = normalizedRole === "laboratory"
+            ? ["laboratory", "lab"]
+            : [normalizedRole];
+
         const user = await User.findOne({
-            phone: String(phone).trim(),
-            role: normalizedRole,
+            phone: phoneLookupQuery(normalizedPhone),
+            role: { $in: roleVariants },
         });
 
         if (!user) {
