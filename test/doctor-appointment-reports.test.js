@@ -9,9 +9,10 @@ async function invokeDoctorAppointments({
   user,
   doctor,
   appointments = [],
+  patients = [],
   doctorNameCount = 1,
 }) {
-  const state = { query: null, doctorQuery: null };
+  const state = { query: null, doctorQuery: null, patientQuery: null };
   const stubs = {
     "../models/Appointment": {
       find(query) {
@@ -21,7 +22,17 @@ async function invokeDoctorAppointments({
       findById: async () => null,
     },
     "../models/VideoCallSession": {},
-    "../models/user": { findById: async () => user },
+    "../models/user": {
+      findById: async () => user,
+      find(query) {
+        state.patientQuery = query;
+        return {
+          select() {
+            return { lean: async () => patients };
+          },
+        };
+      },
+    },
     "../models/doctor": {
       findOne: async (query) => {
         state.doctorQuery = query;
@@ -106,6 +117,39 @@ test("doctor schedule exposes report metadata without storage URLs", async () =>
   assert.equal(result.state.query.$or[0].doctorId, doctorId);
   assert.equal(result.state.doctorQuery._id, doctorId);
   assert.equal(result.state.doctorQuery.$or[0].userId, userId);
+});
+
+test("doctor appointments include the patient's saved profile photo", async () => {
+  const patientPhone = "919876543210";
+  const imageUrl = "https://res.cloudinary.com/healthhome/image/upload/patient.jpg";
+  const result = await invokeDoctorAppointments({
+    user: {
+      _id: userId,
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      phone: "918888888888",
+    },
+    doctor: { _id: doctorId, name: "Test Doctor" },
+    appointments: [
+      {
+        _id: "507f1f77bcf86cd799439033",
+        patientId: null,
+        patientPhone,
+        patientName: "Test Patient",
+        reports: [],
+      },
+    ],
+    patients: [
+      { _id: "507f1f77bcf86cd799439044", phone: patientPhone, profileImage: imageUrl },
+    ],
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.appointments[0].patientProfileImageUrl, imageUrl);
+  assert.deepEqual(result.state.patientQuery, {
+    role: "patient",
+    $or: [{ phone: { $in: [patientPhone] } }],
+  });
 });
 
 test("doctor schedule rejects non-doctors and doctors without their own profile", async () => {

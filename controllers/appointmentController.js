@@ -1207,12 +1207,62 @@ exports.getDoctorAppointments =
 
         });
 
+      // Patient profile photos are owned by the User account. Resolve them
+      // for this doctor's appointments so doctors see the current saved photo
+      // without copying image URLs into appointment records.
+      const patientIds = appointments
+        .map((appointment) => appointment.patientId)
+        .filter(Boolean);
+      const patientPhones = [
+        ...new Set(
+          appointments
+            .map((appointment) =>
+              appointment.patientPhone?.toString().trim(),
+            )
+            .filter(Boolean),
+        ),
+      ];
+      const patientIdentityFilters = [];
+      if (patientIds.length) {
+        patientIdentityFilters.push({ _id: { $in: patientIds } });
+      }
+      if (patientPhones.length) {
+        patientIdentityFilters.push({ phone: { $in: patientPhones } });
+      }
+
+      const patients = patientIdentityFilters.length
+        ? await User.find({
+            role: "patient",
+            $or: patientIdentityFilters,
+          })
+            .select("_id phone profileImage")
+            .lean()
+        : [];
+      const patientsById = new Map(
+        patients.map((patient) => [String(patient._id), patient]),
+      );
+      const patientsByPhone = new Map(
+        patients
+          .filter((patient) => patient.phone)
+          .map((patient) => [patient.phone.toString().trim(), patient]),
+      );
+      const appointmentsWithPatientImages = appointments.map((appointment) => {
+        const serialized = appointmentForDoctorSchedule(appointment);
+        const patient =
+          patientsById.get(String(serialized.patientId || "")) ||
+          patientsByPhone.get(
+            serialized.patientPhone?.toString().trim() || "",
+          );
+        serialized.patientProfileImageUrl = patient?.profileImage || "";
+        return serialized;
+      });
+
 
       return res.json({
 
         success: true,
 
-        appointments: appointments.map(appointmentForDoctorSchedule),
+        appointments: appointmentsWithPatientImages,
 
       });
 
