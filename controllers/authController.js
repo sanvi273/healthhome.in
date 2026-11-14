@@ -461,7 +461,15 @@ const loginUser = async (req, res) => {
 // The account ID comes from the verified JWT, never from a phone in the body.
 const changePassword = async (req, res) => {
     try {
+        const phone = String(req.body?.phone ?? "").trim();
         const password = req.body?.password;
+        const normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length < 8) {
+            return res.status(400).json({
+                success: false,
+                message: "Enter your registered phone number.",
+            });
+        }
         if (!isValidNewPassword(password)) {
             return res.status(400).json({
                 success: false,
@@ -474,6 +482,14 @@ const changePassword = async (req, res) => {
             return res.status(401).json({
                 success: false,
                 message: "Your session is no longer valid. Please sign in again.",
+            });
+        }
+
+        const accountPhone = String(user.phone ?? "").replace(/\D/g, "");
+        if (!accountPhone || normalizedPhone !== accountPhone) {
+            return res.status(400).json({
+                success: false,
+                message: "The phone number does not match your signed-in account.",
             });
         }
 
