@@ -138,7 +138,7 @@ router.get(
 
 router.put(
   "/status/:id",
-
+  authMiddleware,
   updateAppointmentStatus
 );
 

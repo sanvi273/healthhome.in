@@ -1579,6 +1579,69 @@ exports.updateAppointmentStatus =
 
       }
 
+      if (!/^[a-f\d]{24}$/i.test(String(id || ""))) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid appointment ID",
+        });
+      }
+
+      const authenticatedUser = await User.findById(req.user?.id);
+      if (
+        !authenticatedUser ||
+        authenticatedUser.role !== "doctor" ||
+        authenticatedUser.verificationStatus !== "APPROVED"
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "An approved doctor account is required",
+        });
+      }
+
+      const existingAppointment = await Appointment.findById(id);
+      if (!existingAppointment) {
+        return res.status(404).json({
+          success: false,
+          message: "Appointment not found",
+        });
+      }
+
+      const doctorOwnership = {
+        $or: [
+          { userId: authenticatedUser._id },
+          { userId: null, phone: authenticatedUser.phone },
+          {
+            userId: { $exists: false },
+            phone: authenticatedUser.phone,
+          },
+        ],
+      };
+      let ownedDoctor = null;
+      const appointmentDoctorId = String(existingAppointment.doctorId || "");
+      if (/^[a-f\d]{24}$/i.test(appointmentDoctorId)) {
+        ownedDoctor = await Doctor.findOne({
+          _id: appointmentDoctorId,
+          ...doctorOwnership,
+        });
+      } else if (
+        existingAppointment.doctorName &&
+        (await Doctor.countDocuments({
+          name: existingAppointment.doctorName,
+        })) === 1
+      ) {
+        ownedDoctor = await Doctor.findOne({
+          name: existingAppointment.doctorName,
+          ...doctorOwnership,
+        });
+      }
+
+      if (!ownedDoctor) {
+        return res.status(403).json({
+          success: false,
+          message: "You are not authorized to update this appointment",
+        });
+      }
+
       const appointment =
 
         await Appointment.findByIdAndUpdate(

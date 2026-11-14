@@ -1089,9 +1089,9 @@ exports.verifyDoctorPayment = async (req, res) => {
 
     const resolvedMethod = formatPaymentMethod(razorpayPayment.method);
 
-    // 3. Mark Appointment as Paid & Accepted
+    // Payment completion must not accept the appointment. The doctor accepts
+    // it through the appointment status endpoint after reviewing the request.
     appointment.paymentStatus = "Paid";
-    appointment.status = "Accepted";
     appointment.paymentId = razorpay_payment_id;
     appointment.razorpayOrderId = razorpay_order_id;
     await appointment.save();
@@ -1322,7 +1322,6 @@ exports.webhook = async (req, res) => {
             await Appointment.findByIdAndUpdate(paymentRecord.serviceId, {
               $set: {
                 paymentStatus: "Paid",
-                status: "Accepted",
                 paymentId: pId || paymentRecord.paymentId,
               },
             });
