@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const Order = require("../models/orderModel");
 const Medicine = require("../models/medicine");
 const Pharmacy = require("../models/pharmacy");
+const User = require("../models/user");
 
 // ============================================================
 // HELPER: NORMALIZE PAYMENT METHOD
@@ -1640,6 +1641,28 @@ const getPharmacyOrders =
       const pharmacyId =
         req.params.pharmacyId;
 
+      const user = await User.findById(req.user?.id);
+      if (!user || user.role !== "pharmacy") {
+        return res.status(403).json({
+          success: false,
+          message: "Pharmacy account required.",
+        });
+      }
+
+      const pharmacy = await Pharmacy.findOne({
+        _id: pharmacyId,
+        $or: [
+          { userId: user._id },
+          { phone: user.phone },
+        ],
+      });
+      if (!pharmacy) {
+        return res.status(404).json({
+          success: false,
+          message: "Pharmacy profile not found for this account.",
+        });
+      }
+
       const orders =
         await Order.find({
           pharmacyId,
@@ -1647,13 +1670,43 @@ const getPharmacyOrders =
           createdAt: -1,
         });
 
+      const patientPhones = [
+        ...new Set(
+          orders
+            .map((order) => order.patientPhone?.toString().trim())
+            .filter(Boolean),
+        ),
+      ];
+      const patients = patientPhones.length
+        ? await User.find({
+            role: "patient",
+            phone: { $in: patientPhones },
+          })
+            .select("phone profileImage")
+            .lean()
+        : [];
+      const patientImagesByPhone = new Map(
+        patients.map((patient) => [
+          patient.phone?.toString().trim() ?? "",
+          patient.profileImage || "",
+        ]),
+      );
+      const ordersWithPatientImages = orders.map((order) => {
+        const serialized = order.toObject();
+        serialized.patientProfileImageUrl =
+          patientImagesByPhone.get(
+            serialized.patientPhone?.toString().trim() ?? "",
+          ) || "";
+        return serialized;
+      });
+
       return res.status(200).json({
         success: true,
 
         total:
-          orders.length,
+          ordersWithPatientImages.length,
 
-        orders,
+        orders: ordersWithPatientImages,
       });
     } catch (error) {
       console.error(
