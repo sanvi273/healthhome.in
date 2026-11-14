@@ -17,6 +17,15 @@ const uploadToCloudinary =
 // Shared helpers for consistent appointment slot validation.
 const Doctor = require("../models/doctor");
 
+const appointmentWithoutReports = (appointment) => {
+  const data =
+    typeof appointment?.toObject === "function"
+      ? appointment.toObject()
+      : { ...appointment };
+  delete data.reports;
+  return data;
+};
+
 const parseAppointmentTime = (value) => {
   if (typeof value !== "string") return null;
   const input = value.trim();
@@ -1106,6 +1115,8 @@ exports.getAppointments =
 
         await Appointment.find()
 
+          .select("-reports")
+
           .sort({
 
             createdAt: -1,
@@ -1164,24 +1175,6 @@ exports.getDoctorAppointments =
 
           .trim();
 
-      console.log("=================================");
-
-      console.log(
-
-        "GET DOCTOR APPOINTMENTS"
-
-      );
-
-      console.log(
-
-        "DOCTOR ID =",
-
-        doctorId
-
-      );
-
-      console.log("=================================");
-
       if (!doctorId) {
 
         return res.status(400).json({
@@ -1196,6 +1189,28 @@ exports.getDoctorAppointments =
 
       }
 
+      if (!/^[a-f\d]{24}$/i.test(doctorId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid doctor ID",
+        });
+      }
+
+      const authenticatedUser = await User.findById(req.user?.id);
+      if (!authenticatedUser || authenticatedUser.role !== "doctor") {
+        return res.status(403).json({
+          success: false,
+          message: "Doctor account required",
+        });
+      }
+
+      if (authenticatedUser.verificationStatus !== "APPROVED") {
+        return res.status(403).json({
+          success: false,
+          message: "Doctor verification must be approved to view appointments",
+        });
+      }
+
       // --------------------------------------------------------
 
       // FIND DOCTOR
@@ -1206,13 +1221,17 @@ exports.getDoctorAppointments =
 
         require("../models/doctor");
 
-      const doctor =
-
-        await Doctor.findById(
-
-          doctorId
-
-        );
+      const doctor = await Doctor.findOne({
+        _id: doctorId,
+        $or: [
+          { userId: authenticatedUser._id },
+          { userId: null, phone: authenticatedUser.phone },
+          {
+            userId: { $exists: false },
+            phone: authenticatedUser.phone,
+          },
+        ],
+      });
 
       if (!doctor) {
 
@@ -1236,13 +1255,24 @@ exports.getDoctorAppointments =
 
           .trim();
 
-      console.log(
+      const doctorNameIsUnique =
+        (await Doctor.countDocuments({ name: doctorName })) === 1;
 
-        "DOCTOR NAME =",
-
-        doctorName
-
-      );
+      const appointmentConditions = [{ doctorId }];
+      if (doctorNameIsUnique) {
+        appointmentConditions.push({
+          $and: [
+            {
+              $or: [
+                { doctorId: { $exists: false } },
+                { doctorId: "" },
+                { doctorId: null },
+              ],
+            },
+            { doctorName },
+          ],
+        });
+      }
 
       // --------------------------------------------------------
 
@@ -1266,167 +1296,12 @@ exports.getDoctorAppointments =
 
       const appointments =
 
-        await Appointment.find({
-
-          $or: [
-
-            {
-
-              doctorId:
-
-                doctorId,
-
-            },
-
-            {
-
-              $and: [
-
-                {
-
-                  $or: [
-
-                    {
-
-                      doctorId: {
-
-                        $exists:
-
-                          false,
-
-                      },
-
-                    },
-
-                    {
-
-                      doctorId:
-
-                        "",
-
-                    },
-
-                    {
-
-                      doctorId:
-
-                        null,
-
-                    },
-
-                  ],
-
-                },
-
-                {
-
-                  doctorName:
-
-                    doctorName,
-
-                },
-
-              ],
-
-            },
-
-          ],
-
-        }).sort({
+        await Appointment.find({ $or: appointmentConditions }).sort({
 
           createdAt: -1,
 
         });
 
-      console.log(
-
-        "DOCTOR APPOINTMENTS COUNT =",
-
-        appointments.length
-
-      );
-
-      appointments.forEach(
-
-        (
-
-          appointment,
-
-          index
-
-        ) => {
-
-          console.log(
-
-            `APPOINTMENT ${
-
-              index + 1
-
-            }:`
-
-          );
-
-          console.log(
-
-            "ID =",
-
-            appointment._id.toString()
-
-          );
-
-          console.log(
-
-            "PATIENT =",
-
-            appointment.patientName
-
-          );
-
-          console.log(
-
-            "DOCTOR ID =",
-
-            appointment.doctorId
-
-          );
-
-          console.log(
-
-            "DOCTOR NAME =",
-
-            appointment.doctorName
-
-          );
-
-          console.log(
-
-            "CONSULTATION TYPE =",
-
-            appointment.consultationType
-
-          );
-
-          console.log(
-
-            "CONSULTATION STATUS =",
-
-            appointment.consultationStatus
-
-          );
-
-          console.log(
-
-            "STATUS =",
-
-            appointment.status
-
-          );
-
-        }
-
-      );
-
-      console.log("=================================");
 
       return res.json({
 
@@ -1438,13 +1313,7 @@ exports.getDoctorAppointments =
 
     } catch (error) {
 
-      console.log(
-
-        "GET DOCTOR APPOINTMENTS ERROR:",
-
-        error
-
-      );
+      console.error("GET DOCTOR APPOINTMENTS ERROR:", error.message);
 
       return res.status(500).json({
 
@@ -1478,13 +1347,42 @@ exports.getPatientAppointments =
 
       } = req.params;
 
-      const appointments =
+      const authenticatedUser = await User.findById(req.user?.id);
+      if (!authenticatedUser || authenticatedUser.role !== "patient") {
+        return res.status(403).json({
+          success: false,
+          message: "Patient account required",
+        });
+      }
 
-        await Appointment.find({
+      const requestedPhone = patientPhone?.toString().trim();
+      const userPhone = authenticatedUser.phone?.toString().trim();
+      if (!requestedPhone || !userPhone) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only view your own appointments",
+        });
+      }
 
-          patientPhone,
-
-        }).sort({
+      const phoneDigits = userPhone.replace(/\D/g, "");
+      const phoneVariants = [...new Set([userPhone, `+${phoneDigits}`])];
+      if (/^91[6-9]\d{9}$/.test(phoneDigits)) {
+        phoneVariants.push(phoneDigits.slice(2));
+      }
+      const requestedDigits = requestedPhone.replace(/\D/g, "");
+      const requestedVariants = [requestedPhone, requestedDigits];
+      if (/^91[6-9]\d{9}$/.test(requestedDigits)) {
+        requestedVariants.push(requestedDigits.slice(2));
+      }
+      if (!requestedVariants.some((phone) => phoneVariants.includes(phone))) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only view your own appointments",
+        });
+      }
+      const appointments = await Appointment.find({
+        patientPhone: { $in: phoneVariants },
+      }).sort({
 
           createdAt: -1,
 
@@ -1556,9 +1454,11 @@ exports.getAppointmentById =
 
       }
 
+      const appointmentData = appointmentWithoutReports(appointment);
+
       return res.json({
         success: true,
-        appointment,
+        appointment: appointmentData,
       });
 
     } catch (error) {
@@ -1703,7 +1603,7 @@ exports.updateAppointmentStatus =
 
           "Appointment status updated successfully",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -1863,7 +1763,7 @@ exports.updatePaymentStatus =
 
           "Payment status updated",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -2059,7 +1959,7 @@ exports.startConsultation =
 
           "Video consultation started",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -2143,7 +2043,7 @@ exports.joinConsultation =
 
           "Joined consultation",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -2225,6 +2125,7 @@ exports.checkReadyConsultation =
       }).select("callId channelName status expiresAt").lean() : null;
       if (!activeCall) return res.json({ success: true, appointment: null });
       const readyAppointment = appointment.toObject();
+      delete readyAppointment.reports;
       readyAppointment.callId = activeCall.callId;
       readyAppointment.meetingId = activeCall.channelName;
       readyAppointment.callStatus = activeCall.status;
@@ -2315,7 +2216,7 @@ exports.completeConsultation =
 
           "Consultation completed successfully",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -3063,7 +2964,7 @@ exports.proposeReschedule = async (req, res) => {
 
       message: "Reschedule proposal sent to the patient",
 
-      appointment,
+      appointment: appointmentWithoutReports(appointment),
 
     });
 
@@ -3215,7 +3116,7 @@ exports.respondToReschedule = async (req, res) => {
 
         message: "Request sent to the doctor for another time",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -3315,7 +3216,7 @@ exports.respondToReschedule = async (req, res) => {
 
       message: "Reschedule accepted successfully",
 
-      appointment,
+      appointment: appointmentWithoutReports(appointment),
 
     });
 

@@ -1,0 +1,131 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const Module = require("node:module");
+
+const doctorId = "507f1f77bcf86cd799439022";
+const userId = "507f1f77bcf86cd799439011";
+
+async function invokeDoctorAppointments({
+  user,
+  doctor,
+  appointments = [],
+  doctorNameCount = 1,
+}) {
+  const state = { query: null, doctorQuery: null };
+  const stubs = {
+    "../models/Appointment": {
+      find(query) {
+        state.query = query;
+        return { sort: async () => appointments };
+      },
+      findById: async () => null,
+    },
+    "../models/VideoCallSession": {},
+    "../models/user": { findById: async () => user },
+    "../models/doctor": {
+      findOne: async (query) => {
+        state.doctorQuery = query;
+        return doctor;
+      },
+      countDocuments: async () => doctorNameCount,
+    },
+    "../utils/cloudinaryUpload": async () => ({}),
+    "agora-token": { RtcTokenBuilder: {}, RtcRole: {} },
+  };
+  const originalLoad = Module._load;
+  const controllerPath = require.resolve("../controllers/appointmentController");
+
+  try {
+    delete require.cache[controllerPath];
+    Module._load = function (request, parent, isMain) {
+      if (Object.hasOwn(stubs, request)) return stubs[request];
+      return originalLoad.call(this, request, parent, isMain);
+    };
+
+    const controller = require("../controllers/appointmentController");
+    let statusCode = 200;
+    let body;
+    const response = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(value) {
+        body = value;
+        return this;
+      },
+    };
+
+    await controller.getDoctorAppointments(
+      { params: { doctorId }, user: { id: userId } },
+      response,
+    );
+    return { statusCode, body, state };
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[controllerPath];
+  }
+}
+
+test("doctor schedule returns saved report URLs only to the owning approved doctor", async () => {
+  const reportUrl = "https://res.cloudinary.com/healthhome/report.jpg";
+  const result = await invokeDoctorAppointments({
+    user: {
+      _id: userId,
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      phone: "919876543210",
+    },
+    doctor: { _id: doctorId, name: "Test Doctor" },
+    appointments: [
+      {
+        _id: "507f1f77bcf86cd799439033",
+        patientId: "507f1f77bcf86cd799439044",
+        reports: [{ fileName: "report.jpg", fileUrl: reportUrl }],
+      },
+    ],
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.appointments[0].reports[0].fileUrl, reportUrl);
+  assert.equal(result.state.query.$or[0].doctorId, doctorId);
+  assert.equal(result.state.doctorQuery._id, doctorId);
+  assert.equal(result.state.doctorQuery.$or[0].userId, userId);
+});
+
+test("doctor schedule rejects non-doctors and doctors without their own profile", async () => {
+  const patientResult = await invokeDoctorAppointments({
+    user: { _id: userId, role: "patient", phone: "919876543210" },
+    doctor: { _id: doctorId, name: "Test Doctor" },
+  });
+  assert.equal(patientResult.statusCode, 403);
+  assert.equal(patientResult.state.query, null);
+
+  const unrelatedDoctorResult = await invokeDoctorAppointments({
+    user: {
+      _id: userId,
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      phone: "919876543210",
+    },
+    doctor: null,
+  });
+  assert.equal(unrelatedDoctorResult.statusCode, 404);
+  assert.equal(unrelatedDoctorResult.state.query, null);
+});
+
+test("legacy name matching is disabled when doctor names are not unique", async () => {
+  const result = await invokeDoctorAppointments({
+    user: {
+      _id: userId,
+      role: "doctor",
+      verificationStatus: "APPROVED",
+      phone: "919876543210",
+    },
+    doctor: { _id: doctorId, name: "Shared Name" },
+    doctorNameCount: 2,
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.state.query.$or, [{ doctorId }]);
+});

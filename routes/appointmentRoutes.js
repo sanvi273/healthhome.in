@@ -93,7 +93,7 @@ router.get(
 
 router.get(
   "/doctor/:doctorId",
-
+  authMiddleware,
   getDoctorAppointments
 );
 
@@ -105,7 +105,7 @@ router.get(
 
 router.get(
   "/patient/:patientPhone",
-
+  authMiddleware,
   getPatientAppointments
 );
 
