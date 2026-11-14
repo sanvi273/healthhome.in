@@ -436,8 +436,7 @@ const verifyRegistration = async (req, res) => {
 const resendLogin = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
-    // Password recovery now uses a one-time reset link. OTP resend remains
-    // available only for the existing login and registration flows.
+    // Resend is available only for the existing login and registration flows.
     const purpose = ["login", "register"].includes(req.body.purpose) ? req.body.purpose : "login";
     const challenge = await AuthChallenge.findOne({ challengeId: req.body.challengeId, purpose, consumedAt: null, verifiedAt: null });
     if (!challenge || challenge.expiresAt <= new Date()) return res.status(400).json({ success: false, message: "Verification expired. Please sign in again." });

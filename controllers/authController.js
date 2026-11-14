@@ -11,6 +11,13 @@ const VerificationCounter = require("../models/verificationCounter");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
+const isValidNewPassword = (password) =>
+    typeof password === "string" &&
+    password.length >= 8 &&
+    password.length <= 128 &&
+    /[A-Za-z]/.test(password) &&
+    /\d/.test(password);
+
 // ============================================================
 // GENERATE HEALTHHOME VERIFICATION ID
 // ============================================================
@@ -450,6 +457,50 @@ const loginUser = async (req, res) => {
     }
 };
 
+// A password can only be changed with an authenticated HealthHome session.
+// The account ID comes from the verified JWT, never from a phone in the body.
+const changePassword = async (req, res) => {
+    try {
+        const password = req.body?.password;
+        if (!isValidNewPassword(password)) {
+            return res.status(400).json({
+                success: false,
+                message: "Use at least 8 characters, including a letter and a number.",
+            });
+        }
+
+        const user = await User.findById(req.user?.id);
+        if (!user || user.role !== req.user?.role || user.accountStatus === "SUSPENDED") {
+            return res.status(401).json({
+                success: false,
+                message: "Your session is no longer valid. Please sign in again.",
+            });
+        }
+
+        if (await bcrypt.compare(password, user.password)) {
+            return res.status(400).json({
+                success: false,
+                message: "Choose a password different from your current password.",
+            });
+        }
+
+        user.password = await bcrypt.hash(password, 10);
+        user.passwordChangedAt = new Date();
+        await user.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Password updated. Please sign in again with your new password.",
+        });
+    } catch (error) {
+        console.error("CHANGE PASSWORD ERROR:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to update your password. Please try again.",
+        });
+    }
+};
+
 // ============================================================
 // UPDATE ONESIGNAL ID
 // ============================================================
@@ -502,6 +553,7 @@ const updateOneSignalId = async (req, res) => {
 module.exports = {
     registerUser,
     loginUser,
+    changePassword,
     updateOneSignalId,
     generateVerificationId,
 };
