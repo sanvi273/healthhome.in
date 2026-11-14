@@ -67,8 +67,7 @@ async function invokeDoctorAppointments({
   }
 }
 
-test("doctor schedule returns saved report URLs only to the owning approved doctor", async () => {
-  const reportUrl = "https://res.cloudinary.com/healthhome/report.jpg";
+test("doctor schedule exposes report metadata without storage URLs", async () => {
   const result = await invokeDoctorAppointments({
     user: {
       _id: userId,
@@ -81,13 +80,29 @@ test("doctor schedule returns saved report URLs only to the owning approved doct
       {
         _id: "507f1f77bcf86cd799439033",
         patientId: "507f1f77bcf86cd799439044",
-        reports: [{ fileName: "report.jpg", fileUrl: reportUrl }],
+        reports: [
+          {
+            _id: "507f1f77bcf86cd799439055",
+            fileName: "report.jpg",
+            fileType: "image/jpeg",
+            fileUrl: "https://res.cloudinary.com/healthhome/private/report.jpg",
+            storagePublicId: "appointment_reports/report",
+            resourceType: "image",
+            fileFormat: "jpg",
+          },
+        ],
       },
     ],
   });
 
   assert.equal(result.statusCode, 200);
-  assert.equal(result.body.appointments[0].reports[0].fileUrl, reportUrl);
+  assert.deepEqual(result.body.appointments[0].reports[0], {
+    _id: "507f1f77bcf86cd799439055",
+    fileName: "report.jpg",
+    fileType: "image/jpeg",
+    uploadedAt: null,
+    canView: true,
+  });
   assert.equal(result.state.query.$or[0].doctorId, doctorId);
   assert.equal(result.state.doctorQuery._id, doctorId);
   assert.equal(result.state.doctorQuery.$or[0].userId, userId);

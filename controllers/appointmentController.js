@@ -10,9 +10,11 @@ const {
 
 } = require("agora-token");
 
-const uploadToCloudinary =
-
-  require("../utils/cloudinaryUpload");
+const {
+  uploadPatientReport,
+  getPatientReportBytes,
+  isAllowedLegacyCloudinaryUrl,
+} = require("../utils/patientReportStorage");
 
 // Shared helpers for consistent appointment slot validation.
 const Doctor = require("../models/doctor");
@@ -23,6 +25,45 @@ const appointmentWithoutReports = (appointment) => {
       ? appointment.toObject()
       : { ...appointment };
   delete data.reports;
+  return data;
+};
+
+const appointmentForDoctorSchedule = (appointment) => {
+  const data =
+    typeof appointment?.toObject === "function"
+      ? appointment.toObject()
+      : { ...appointment };
+  data.reports = (Array.isArray(data.reports) ? data.reports : []).map((raw) => {
+    const report =
+      raw && typeof raw.toObject === "function"
+        ? raw.toObject()
+        : raw && typeof raw === "object"
+          ? raw
+          : {};
+    const reportId = String(report._id || "");
+    const hasPrivateStorageReference = Boolean(
+      report.storagePublicId && report.resourceType && report.fileFormat
+    );
+    const legacyUrl =
+      report.fileUrl ||
+      report.secure_url ||
+      report.secureUrl ||
+      report.reportUrl ||
+      report.url ||
+      "";
+
+    return {
+      _id: reportId,
+      fileName: String(report.fileName || "Patient Report"),
+      fileType: String(report.fileType || ""),
+      uploadedAt: report.uploadedAt || null,
+      canView: Boolean(
+        reportId &&
+          (hasPrivateStorageReference ||
+            isAllowedLegacyCloudinaryUrl(legacyUrl))
+      ),
+    };
+  });
   return data;
 };
 
@@ -148,16 +189,6 @@ exports.bookAppointment =
 
     try {
 
-      console.log("=================================");
-
-      console.log("BOOK APPOINTMENT");
-
-      console.log("BODY =", req.body);
-
-      console.log("FILES =", req.files);
-
-      console.log("=================================");
-
       const {
 
         patientName,
@@ -190,37 +221,9 @@ exports.bookAppointment =
 
       // ========================================================
 
-      // DEBUG CONSULTATION TYPE
+      // NORMALIZE CONSULTATION TYPE
 
       // ========================================================
-
-      console.log("=================================");
-
-      console.log(
-
-        "RECEIVED CONSULTATION TYPE =",
-
-        consultationType
-
-      );
-
-      console.log(
-
-        "RECEIVED CONSULTATION TYPE JSON =",
-
-        JSON.stringify(consultationType)
-
-      );
-
-      console.log(
-
-        "RECEIVED CONSULTATION TYPE TYPE =",
-
-        typeof consultationType
-
-      );
-
-      console.log("=================================");
 
       // ========================================================
 
@@ -274,29 +277,9 @@ exports.bookAppointment =
 
       // ========================================================
 
-      // DEBUG FINAL CONSULTATION TYPE
+      // FINAL CONSULTATION TYPE
 
       // ========================================================
-
-      console.log("=================================");
-
-      console.log(
-
-        "FINAL CONSULTATION TYPE =",
-
-        finalConsultationType
-
-      );
-
-      console.log(
-
-        "FINAL CONSULTATION TYPE JSON =",
-
-        JSON.stringify(finalConsultationType)
-
-      );
-
-      console.log("=================================");
 
       // ========================================================
 
@@ -387,31 +370,7 @@ exports.bookAppointment =
 
         ) {
 
-          const result =
-
-            await uploadToCloudinary(
-
-              file,
-
-              "appointment_reports"
-
-            );
-
-          uploadedReports.push({
-
-            fileName:
-
-              file.originalname || "",
-
-            fileUrl:
-
-              result.secure_url || "",
-
-            fileType:
-
-              file.mimetype || "",
-
-          });
+          uploadedReports.push(await uploadPatientReport(file));
 
         }
 
@@ -422,60 +381,6 @@ exports.bookAppointment =
       // CREATE APPOINTMENT
 
       // ========================================================
-
-      console.log("=================================");
-
-      console.log("FINAL APPOINTMENT DATA");
-
-      console.log(
-
-        "doctorId =",
-
-        doctorId
-
-      );
-
-      console.log(
-
-        "doctorId type =",
-
-        typeof doctorId
-
-      );
-
-      console.log(
-
-        "doctorName =",
-
-        doctorName
-
-      );
-
-      console.log(
-
-        "appointmentDate =",
-
-        appointmentDate
-
-      );
-
-      console.log(
-
-        "appointmentTime =",
-
-        appointmentTime
-
-      );
-
-      console.log(
-
-        "consultationType =",
-
-        finalConsultationType
-
-      );
-
-      console.log("=================================");
 
       // ========================================================
 
@@ -647,7 +552,7 @@ exports.bookAppointment =
 
           "Appointment booked successfully",
 
-        appointment,
+        appointment: appointmentWithoutReports(appointment),
 
       });
 
@@ -1307,7 +1212,7 @@ exports.getDoctorAppointments =
 
         success: true,
 
-        appointments,
+        appointments: appointments.map(appointmentForDoctorSchedule),
 
       });
 
@@ -1328,6 +1233,119 @@ exports.getDoctorAppointments =
     }
 
   };
+
+// Stream a specific report only after checking the signed-in doctor owns
+// the appointment. The Cloudinary API secret and time-limited download URL
+// stay on the backend.
+exports.getDoctorAppointmentReportFile = async (req, res) => {
+  try {
+    const { appointmentId, reportId } = req.params;
+    if (
+      !/^[a-f\d]{24}$/i.test(String(appointmentId || "")) ||
+      !/^[a-f\d]{24}$/i.test(String(reportId || ""))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid appointment or report ID",
+      });
+    }
+
+    const appointment = await Appointment.findById(appointmentId).select(
+      "doctorId doctorName reports",
+    );
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: "Appointment not found" });
+    }
+
+    const authenticatedUser = await User.findById(req.user?.id);
+    if (
+      !authenticatedUser ||
+      authenticatedUser.role !== "doctor" ||
+      authenticatedUser.verificationStatus !== "APPROVED"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "An approved doctor account is required",
+      });
+    }
+
+    const ownershipQuery = {
+      $or: [
+        { userId: authenticatedUser._id },
+        { userId: null, phone: authenticatedUser.phone },
+        {
+          userId: { $exists: false },
+          phone: authenticatedUser.phone,
+        },
+      ],
+    };
+
+    let doctor = null;
+    const appointmentDoctorId = String(appointment.doctorId || "");
+    if (/^[a-f\d]{24}$/i.test(appointmentDoctorId)) {
+      doctor = await Doctor.findOne({
+        _id: appointmentDoctorId,
+        ...ownershipQuery,
+      });
+    } else if (
+      appointment.doctorName &&
+      (await Doctor.countDocuments({ name: appointment.doctorName })) === 1
+    ) {
+      doctor = await Doctor.findOne({
+        name: appointment.doctorName,
+        ...ownershipQuery,
+      });
+    }
+
+    if (!doctor) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to access this appointment report",
+      });
+    }
+
+    const report = Array.isArray(appointment.reports)
+      ? appointment.reports.find((item) => String(item?._id || "") === reportId)
+      : null;
+    if (!report) {
+      return res.status(404).json({ success: false, message: "Report not found" });
+    }
+
+    const reportData =
+      typeof report.toObject === "function" ? report.toObject() : { ...report };
+    reportData.fileUrl =
+      reportData.fileUrl ||
+      reportData.secure_url ||
+      reportData.secureUrl ||
+      reportData.reportUrl ||
+      reportData.url ||
+      "";
+
+    const delivered = await getPatientReportBytes(reportData);
+    res.status(200);
+    res.set("Content-Type", delivered.fileType);
+    res.set("Content-Length", String(delivered.bytes.length));
+    res.set("Cache-Control", "private, no-store");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set(
+      "Content-Disposition",
+      `inline; filename*=UTF-8''${encodeURIComponent(reportData.fileName || "patient-report")}`,
+    );
+    return res.end(delivered.bytes);
+  } catch (error) {
+    console.error("DOCTOR REPORT DELIVERY FAILED");
+    const statusCode = [400, 403, 404, 415].includes(error.statusCode)
+      ? error.statusCode
+      : 502;
+    return res.status(statusCode).json({
+      success: false,
+      message:
+        statusCode === 404
+          ? "Report file was not found in storage"
+          : "Unable to load this report right now",
+    });
+  }
+};
 
 // ============================================================
 

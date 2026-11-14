@@ -7,6 +7,16 @@ const Order = require("../models/orderModel");
 const Appointment = require("../models/Appointment");
 const User = require("../models/user");
 const uploadToCloudinary = require("../utils/cloudinaryUpload");
+const { uploadPatientReport } = require("../utils/patientReportStorage");
+
+const appointmentWithoutReports = (appointment) => {
+  const data =
+    typeof appointment?.toObject === "function"
+      ? appointment.toObject()
+      : { ...appointment };
+  delete data.reports;
+  return data;
+};
 
 // ============================================================
 // RAZORPAY CONFIGURATION
@@ -862,22 +872,12 @@ exports.createDoctorOrder = async (req, res) => {
       });
     }
 
-    // Multer keeps uploaded files in memory, so file.path is not a durable URL.
-    // Store every report in Cloudinary before saving the appointment.
+    // Multer keeps uploaded files in memory. Store bytes as authenticated
+    // Cloudinary assets and keep only the storage reference in MongoDB.
     const reports = [];
     if (req.files && Array.isArray(req.files)) {
       for (const file of req.files) {
-        const upload = await uploadToCloudinary(file, "appointment_reports");
-        const fileUrl = upload?.secure_url;
-        if (typeof fileUrl !== "string" || fileUrl.trim().length === 0) {
-          throw new Error("Unable to store uploaded medical report.");
-        }
-
-        reports.push({
-          fileName: file.originalname || "Medical Report",
-          fileUrl: fileUrl.trim(),
-          fileType: file.mimetype || "application/pdf",
-        });
+        reports.push(await uploadPatientReport(file));
       }
     }
 
@@ -951,7 +951,7 @@ exports.createDoctorOrder = async (req, res) => {
       amount: amountInPaise,
       currency: "INR",
       appointmentId: String(appointment._id),
-      appointment,
+      appointment: appointmentWithoutReports(appointment),
     });
   } catch (error) {
     console.error("CREATE DOCTOR ORDER ERROR:", error);

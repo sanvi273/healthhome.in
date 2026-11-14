@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 
-test("doctor appointment checkout stores uploaded reports at their Cloudinary URLs", async () => {
+test("doctor appointment checkout stores authenticated report references", async () => {
   const previousEnv = {
     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
@@ -37,9 +37,31 @@ test("doctor appointment checkout stores uploaded reports at their Cloudinary UR
       },
     },
     "../models/user": { findById: async () => patient },
-    "../utils/cloudinaryUpload": async (file, folder) => {
-      state.uploadedFiles.push({ file, folder });
-      return { secure_url: "https://res.cloudinary.com/healthhome/report.jpg" };
+    "../utils/cloudinaryUpload": async (file, folder, options) => {
+      state.uploadedFiles.push({ file, folder, options });
+      return {
+        secure_url: "https://res.cloudinary.com/healthhome/image/authenticated/report.jpg",
+        public_id: "appointment_reports/report",
+        resource_type: "image",
+        format: "jpg",
+      };
+    },
+    "../utils/patientReportStorage": {
+      uploadPatientReport: async (file) => {
+        const uploaded = await modelStubs["../utils/cloudinaryUpload"](
+          file,
+          "appointment_reports",
+          { type: "authenticated" },
+        );
+        return {
+          fileName: file.originalname,
+          fileType: "image/jpeg",
+          storagePublicId: uploaded.public_id,
+          resourceType: uploaded.resource_type,
+          fileFormat: uploaded.format,
+          uploadedAt: new Date(),
+        };
+      },
     },
   };
   class FakeObjectId {
@@ -105,7 +127,7 @@ test("doctor appointment checkout stores uploaded reports at their Cloudinary UR
           {
             originalname: "blood-test.jpg",
             mimetype: "image/jpeg",
-            buffer: Buffer.from("report"),
+            buffer: Buffer.from([0xff, 0xd8, 0xff, 0xdb]),
           },
         ],
       },
@@ -115,11 +137,14 @@ test("doctor appointment checkout stores uploaded reports at their Cloudinary UR
     assert.equal(statusCode, 200, JSON.stringify(body));
     assert.equal(state.uploadedFiles.length, 1);
     assert.equal(state.uploadedFiles[0].folder, "appointment_reports");
+    assert.deepEqual(state.uploadedFiles[0].options, { type: "authenticated" });
+    assert.equal(state.appointment.reports[0].fileUrl, undefined);
     assert.equal(
-      state.appointment.reports[0].fileUrl,
-      "https://res.cloudinary.com/healthhome/report.jpg",
+      state.appointment.reports[0].storagePublicId,
+      "appointment_reports/report",
     );
     assert.equal(state.appointment.reports[0].fileName, "blood-test.jpg");
+    assert.equal(body.appointment.reports, undefined);
   } finally {
     Module._load = originalLoad;
     delete require.cache[controllerPath];

@@ -13,6 +13,7 @@ const {
   getAvailableSlots,
   getAppointments,
   getDoctorAppointments,
+  getDoctorAppointmentReportFile,
   getPatientAppointments,
   getAppointmentById,
   updateAppointmentStatus,
@@ -95,6 +96,14 @@ router.get(
   "/doctor/:doctorId",
   authMiddleware,
   getDoctorAppointments
+);
+
+// The report ID must belong to the appointment, and the authenticated
+// approved doctor must own that appointment's doctor profile.
+router.get(
+  "/:appointmentId/reports/:reportId/file",
+  authMiddleware,
+  getDoctorAppointmentReportFile
 );
 
 // ============================================================

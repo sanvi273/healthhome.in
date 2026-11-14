@@ -204,6 +204,25 @@ const appointmentSchema = new mongoose.Schema(
           type: String,
           default: "",
         },
+
+        storagePublicId: {
+          type: String,
+          default: "",
+        },
+
+        resourceType: {
+          type: String,
+          default: "",
+        },
+
+        fileFormat: {
+          type: String,
+          default: "",
+        },
+
+        uploadedAt: {
+          type: Date,
+        },
       },
     ],
 
