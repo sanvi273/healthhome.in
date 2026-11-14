@@ -13,7 +13,7 @@ const jwt = require("jsonwebtoken");
 
 const isValidNewPassword = (password) =>
     typeof password === "string" &&
-    password.length >= 8 &&
+    password.length >= 6 &&
     password.length <= 128 &&
     /[A-Za-z]/.test(password) &&
     /\d/.test(password);
@@ -465,7 +465,7 @@ const changePassword = async (req, res) => {
         if (!isValidNewPassword(password)) {
             return res.status(400).json({
                 success: false,
-                message: "Use at least 8 characters, including a letter and a number.",
+                message: "Use at least 6 characters, including a letter and a number.",
             });
         }
 
