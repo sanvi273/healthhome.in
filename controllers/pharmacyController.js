@@ -1,4 +1,5 @@
 const Pharmacy = require("../models/pharmacy");
+const User = require("../models/user");
 
 // ============================================================
 // ADD PHARMACY
@@ -85,10 +86,26 @@ const getPharmacies = async (req, res) => {
   try {
     const pharmacies = await Pharmacy.find()
       .sort({ createdAt: -1 });
+    const phones = [...new Set(pharmacies.map((item) => item.phone).filter(Boolean))];
+    const users = phones.length
+      ? await User.find({ role: "pharmacy", phone: { $in: phones } })
+          .select("phone profileImage profileImagePublicId")
+          .lean()
+      : [];
+    const usersByPhone = new Map(users.map((user) => [user.phone, user]));
+    const pharmaciesWithImages = pharmacies.map((pharmacy) => {
+      const serialized = pharmacy.toObject();
+      const owner = usersByPhone.get(pharmacy.phone);
+      serialized.profileImageUrl =
+        owner?.profileImage || serialized.profileImageUrl || serialized.image || "";
+      serialized.profileImagePublicId =
+        owner?.profileImagePublicId || serialized.profileImagePublicId || "";
+      return serialized;
+    });
 
     return res.status(200).json({
       success: true,
-      pharmacies,
+      pharmacies: pharmaciesWithImages,
     });
   } catch (error) {
     console.error(
@@ -148,9 +165,20 @@ const getPharmacyProfile = async (req, res) => {
       });
     }
 
+    const owner = await User.findOne({
+      phone: pharmacyPhone,
+      role: "pharmacy",
+    }).select("profileImage profileImagePublicId").lean();
+
     return res.status(200).json({
       success: true,
-      pharmacy,
+      pharmacy: {
+        ...pharmacy.toObject(),
+        profileImageUrl:
+          owner?.profileImage || pharmacy.profileImageUrl || pharmacy.image || "",
+        profileImagePublicId:
+          owner?.profileImagePublicId || pharmacy.profileImagePublicId || "",
+      },
     });
   } catch (error) {
     console.error(

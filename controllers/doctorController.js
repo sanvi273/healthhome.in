@@ -118,6 +118,8 @@ const addDoctor = async (req, res) => {
       userId: user._id,
       name: String(name).trim(),
       phone: user.phone,
+      profileImageUrl: user.profileImage || "",
+      profileImagePublicId: user.profileImagePublicId || "",
       specialization: String(specialization).trim(),
       experience: String(experience).trim(),
       fees: String(fees).trim(),
@@ -177,7 +179,7 @@ const getDoctors = async (req, res) => {
       role: "doctor",
       verificationStatus: "APPROVED",
       accountStatus: "ACTIVE",
-    }).select("_id phone");
+    }).select("_id phone profileImage profileImagePublicId");
 
     if (approvedUsers.length === 0) {
       return res.status(200).json({ success: true, doctors: [] });
@@ -195,9 +197,27 @@ const getDoctors = async (req, res) => {
       ],
     }).sort({ createdAt: -1 });
 
+    const usersById = new Map(
+      approvedUsers.map((user) => [String(user._id), user]),
+    );
+    const usersByPhone = new Map(
+      approvedUsers.filter((user) => user.phone).map((user) => [user.phone, user]),
+    );
+    const doctorsWithImages = doctors.map((doctor) => {
+      const serialized = doctor.toObject();
+      const owner =
+        usersById.get(String(doctor.userId || "")) ||
+        usersByPhone.get(doctor.phone);
+      serialized.profileImageUrl =
+        owner?.profileImage || serialized.profileImageUrl || "";
+      serialized.profileImagePublicId =
+        owner?.profileImagePublicId || serialized.profileImagePublicId || "";
+      return serialized;
+    });
+
     return res.status(200).json({
       success: true,
-      doctors,
+      doctors: doctorsWithImages,
     });
   } catch (error) {
     return res.status(500).json({
@@ -218,7 +238,7 @@ const getDoctorProfile = async (req, res) => {
       role: "doctor",
       verificationStatus: "APPROVED",
       accountStatus: "ACTIVE",
-    }).select("_id");
+    }).select("_id profileImage profileImagePublicId");
 
     if (!user) {
       return res.status(404).json({
@@ -245,7 +265,13 @@ const getDoctorProfile = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      doctor,
+      doctor: {
+        ...doctor.toObject(),
+        profileImageUrl:
+          user.profileImage || doctor.profileImageUrl || "",
+        profileImagePublicId:
+          user.profileImagePublicId || doctor.profileImagePublicId || "",
+      },
     });
   } catch (error) {
     return res.status(500).json({

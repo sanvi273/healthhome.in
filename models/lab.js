@@ -107,6 +107,18 @@ const labSchema = new mongoose.Schema(
       default: "",
     },
 
+    profileImageUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    profileImagePublicId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     // ========================================================
     // LAB TESTS
     // ========================================================

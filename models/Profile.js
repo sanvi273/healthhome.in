@@ -14,6 +14,14 @@ const profileSchema = new mongoose.Schema(
     height: String,
     weight: String,
     photo: String,
+    profileImageUrl: {
+      type: String,
+      default: "",
+    },
+    profileImagePublicId: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,

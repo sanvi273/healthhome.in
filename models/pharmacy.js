@@ -6,6 +6,13 @@ const mongoose = require("mongoose");
 
 const pharmacySchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
     // ============================================================
     // PHARMACY BASIC DETAILS
     // ============================================================
@@ -104,6 +111,18 @@ const pharmacySchema = new mongoose.Schema(
     image: {
       type: String,
       default: "",
+    },
+
+    profileImageUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    profileImagePublicId: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     // ============================================================

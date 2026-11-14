@@ -81,6 +81,9 @@ const addLab = async (req, res) => {
       existingLab.labType = labType.trim();
       existingLab.experience = experience.trim();
       existingLab.address = address.trim();
+      existingLab.profileImageUrl = user.profileImage || existingLab.profileImageUrl || "";
+      existingLab.profileImagePublicId = user.profileImagePublicId || existingLab.profileImagePublicId || "";
+      if (user.profileImage) existingLab.image = user.profileImage;
 
       await existingLab.save();
 
@@ -99,6 +102,9 @@ const addLab = async (req, res) => {
       experience: experience.trim(),
       address: address.trim(),
       phone: registeredPhone,
+      profileImageUrl: user.profileImage || "",
+      profileImagePublicId: user.profileImagePublicId || "",
+      image: user.profileImage || "",
     });
 
     return res.status(201).json({
@@ -126,10 +132,26 @@ const addLab = async (req, res) => {
 const getLabs = async (req, res) => {
   try {
     const labs = await Lab.find();
+    const phones = [...new Set(labs.map((lab) => lab.phone).filter(Boolean))];
+    const users = phones.length
+      ? await User.find({ role: "laboratory", phone: { $in: phones } })
+          .select("phone profileImage profileImagePublicId")
+          .lean()
+      : [];
+    const usersByPhone = new Map(users.map((user) => [user.phone, user]));
+    const labsWithImages = labs.map((lab) => {
+      const serialized = lab.toObject();
+      const owner = usersByPhone.get(lab.phone);
+      serialized.profileImageUrl =
+        owner?.profileImage || serialized.profileImageUrl || serialized.image || "";
+      serialized.profileImagePublicId =
+        owner?.profileImagePublicId || serialized.profileImagePublicId || "";
+      return serialized;
+    });
 
     res.status(200).json({
       success: true,
-      labs,
+      labs: labsWithImages,
     });
   } catch (error) {
     res.status(500).json({
@@ -156,9 +178,20 @@ const getLabProfile = async (req, res) => {
       });
     }
 
+    const owner = await User.findOne({
+      phone: req.params.phone,
+      role: "laboratory",
+    }).select("profileImage profileImagePublicId").lean();
+
     return res.status(200).json({
       success: true,
-      lab,
+      lab: {
+        ...lab.toObject(),
+        profileImageUrl:
+          owner?.profileImage || lab.profileImageUrl || lab.image || "",
+        profileImagePublicId:
+          owner?.profileImagePublicId || lab.profileImagePublicId || "",
+      },
     });
   } catch (error) {
     return res.status(500).json({

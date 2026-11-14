@@ -53,6 +53,18 @@ const doctorSchema = new mongoose.Schema(
       trim: true,
     },
 
+    profileImageUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    profileImagePublicId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     isAvailable: {
       type: Boolean,
       default: true,
