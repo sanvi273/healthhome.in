@@ -2,8 +2,7 @@ const express = require("express");
 
 console.log("✅ authRoutes.js loaded");
 
-const { updateOneSignalId, loginUser, changePassword } = require("../controllers/authController");
-const authMiddleware = require("../middleware/authMiddleware");
+const { updateOneSignalId, loginUser } = require("../controllers/authController");
 
 const { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration } = require("../controllers/authOtpController");
 const router = express.Router();
@@ -31,8 +30,6 @@ router.post("/login/initiate", initiateLogin);
 router.post("/login/verify", verifyLogin);
 router.post("/otp/resend", resendLogin);
 router.post("/login/resend", resendLogin);
-router.post("/change-password", authMiddleware, changePassword);
-
 // ============================================================
 // UPDATE ONESIGNAL ID
 // ============================================================
