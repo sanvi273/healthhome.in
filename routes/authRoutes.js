@@ -4,7 +4,12 @@ console.log("✅ authRoutes.js loaded");
 
 const { updateOneSignalId, loginUser } = require("../controllers/authController");
 
-const { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword } = require("../controllers/authOtpController");
+const { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration } = require("../controllers/authOtpController");
+const {
+  requestPasswordReset,
+  completePasswordReset,
+  openPasswordResetPage,
+} = require("../controllers/passwordResetController");
 
 const router = express.Router();
 
@@ -31,9 +36,9 @@ router.post("/login/initiate", initiateLogin);
 router.post("/login/verify", verifyLogin);
 router.post("/otp/resend", resendLogin);
 router.post("/login/resend", resendLogin);
-router.post("/forgot-password", initiateForgotPassword);
-router.post("/forgot-password/verify", verifyResetOtp);
-router.post("/reset-password", resetPassword);
+router.post("/forgot-password", requestPasswordReset);
+router.get("/forgot-password/open", openPasswordResetPage);
+router.post("/reset-password", completePasswordReset);
 
 // ============================================================
 // UPDATE ONESIGNAL ID

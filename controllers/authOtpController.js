@@ -35,15 +35,6 @@ function phoneQuery(phone) {
   return { $in: variants };
 }
 
-function genericResetChallenge() {
-  return {
-    success: true,
-    challengeId: crypto.randomBytes(32).toString("base64url"),
-    requestId: crypto.randomBytes(16).toString("hex"),
-    message: "If an eligible account exists, a verification code will be sent.",
-  };
-}
-
 function allowIp(ip) {
   const now = Date.now();
   const entry = ipWindows.get(ip) || { start: now, count: 0 };
@@ -442,88 +433,12 @@ const verifyRegistration = async (req, res) => {
   }
 };
 
-const initiateForgotPassword = async (req, res) => {
-  try {
-    if (!allowIp(req.ip)) return res.status(429).json({ success: false, message: "Please try again later." });
-    const phone = normalizePhone(req.body.phone);
-    if (!phone) return res.status(200).json(genericResetChallenge());
-    await incrementRateLimit("phone", phone, 5);
-    const user = await User.findOne({ phone: phoneQuery(phone) }).select("_id phone role accountStatus");
-    if (user && user.accountStatus !== "SUSPENDED") {
-      const challengeId = await createChallenge({ purpose: "reset", phone, user, ip: req.ip, skipPhoneRateLimit: true });
-      const challenge = await AuthChallenge.findOne({ challengeId }).select("msg91RequestId").lean();
-      return res.status(200).json({ success: true, challengeId, requestId: challenge.msg91RequestId, message: "If an eligible account exists, a verification code will be sent." });
-    }
-    return res.status(200).json(genericResetChallenge());
-  } catch (error) {
-    if (error.message === "OTP_RATE_LIMIT" || error.message === "OTP_PROVIDER_NOT_CONFIGURED" || error.message === "OTP_PROVIDER_FAILURE") {
-      return res.status(200).json(genericResetChallenge());
-    }
-    console.error("PASSWORD RESET OTP INITIATION FAILED");
-    return res.status(500).json({ success: false, message: "Unable to process request. Please try again." });
-  }
-};
-
-const verifyResetOtp = async (req, res) => {
-  try {
-    if (!allowIp(req.ip)) return rateLimited(res);
-    const { challengeId, accessToken, otp } = req.body;
-    if (typeof challengeId !== "string" ||
-      !(typeof accessToken === "string" && accessToken.length <= 4096) && typeof otp !== "string") return res.status(400).json({ success: false, message: "Invalid verification request." });
-    const challenge = await AuthChallenge.findOne({ challengeId, purpose: "reset", consumedAt: null, verifiedAt: null });
-    if (!challenge || challenge.expiresAt <= new Date()) return res.status(400).json({ success: false, message: "Verification expired. Please start again." });
-    await countVerificationAttempt(challenge);
-    const result = await verifyChallengeWithMsg91(challenge, { otp, accessToken });
-    const verifiedPhone = normalizePhone(result.identifier || result.data?.identifier || result.data?.mobile || result.mobile || result.message);
-    if (!verifiedPhone || verifiedPhone !== challenge.phone) return res.status(401).json({ success: false, message: "Phone verification could not be confirmed." });
-    const user = await User.findById(challenge.userId);
-    if (!user || user.accountStatus === "SUSPENDED") return res.status(400).json({ success: false, message: "Verification could not be completed." });
-    const resetToken = crypto.randomBytes(32).toString("base64url");
-    const claimed = await AuthChallenge.findOneAndUpdate(
-      { _id: challenge._id, consumedAt: null, verifiedAt: null, expiresAt: { $gt: new Date() } },
-      { $set: { verifiedAt: new Date(), resetTokenHash: crypto.createHash("sha256").update(resetToken).digest("hex"), expiresAt: new Date(Date.now() + 10 * 60 * 1000) } },
-      { new: true },
-    );
-    if (!claimed) return res.status(409).json({ success: false, message: "Verification has already been used." });
-    return res.json({ success: true, resetToken });
-  } catch (error) {
-    if (error.message === "OTP_ATTEMPTS_EXCEEDED") return rateLimited(res);
-    if (error.message === "OTP_PROVIDER_NOT_CONFIGURED") return providerFailure(res);
-    if (error.message === "OTP_TOKEN_INVALID") return res.status(401).json({ success: false, message: "Invalid or expired verification." });
-    console.error("PASSWORD RESET OTP VERIFICATION FAILED");
-    return res.status(500).json({ success: false, message: "Unable to verify code." });
-  }
-};
-
-const resetPassword = async (req, res) => {
-  try {
-    const { resetToken, password } = req.body;
-    if (typeof resetToken !== "string" || typeof password !== "string" || password.length < 8 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-      return res.status(400).json({ success: false, message: "Use a password with at least 8 characters, including a letter and a number." });
-    }
-    const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
-    const challenge = await AuthChallenge.findOneAndUpdate(
-      { purpose: "reset", resetTokenHash: tokenHash, consumedAt: null, verifiedAt: { $ne: null }, expiresAt: { $gt: new Date() } },
-      { $set: { consumedAt: new Date(), resetTokenHash: "" } },
-      { new: true },
-    );
-    if (!challenge || !challenge.verifiedAt) return res.status(401).json({ success: false, message: "Password reset authorization is invalid or expired." });
-    const user = await User.findById(challenge.userId);
-    if (!user) return res.status(401).json({ success: false, message: "Password reset authorization is invalid or expired." });
-    user.password = await bcrypt.hash(password, 10);
-    user.passwordChangedAt = new Date();
-    await user.save();
-    return res.json({ success: true, message: "Password reset successfully." });
-  } catch (error) {
-    console.error("PASSWORD RESET FAILED");
-    return res.status(500).json({ success: false, message: "Unable to reset password." });
-  }
-};
-
 const resendLogin = async (req, res) => {
   try {
     if (!allowIp(req.ip)) return rateLimited(res);
-    const purpose = ["login", "register", "reset"].includes(req.body.purpose) ? req.body.purpose : "login";
+    // Password recovery now uses a one-time reset link. OTP resend remains
+    // available only for the existing login and registration flows.
+    const purpose = ["login", "register"].includes(req.body.purpose) ? req.body.purpose : "login";
     const challenge = await AuthChallenge.findOne({ challengeId: req.body.challengeId, purpose, consumedAt: null, verifiedAt: null });
     if (!challenge || challenge.expiresAt <= new Date()) return res.status(400).json({ success: false, message: "Verification expired. Please sign in again." });
     const elapsed = Date.now() - challenge.lastSentAt.getTime();
@@ -543,4 +458,4 @@ const resendLogin = async (req, res) => {
   }
 };
 
-module.exports = { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, initiateForgotPassword, verifyResetOtp, resetPassword, createChallenge, normalizePhone, msg91, verifyWidgetAccessToken };
+module.exports = { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration, createChallenge, normalizePhone, msg91, verifyWidgetAccessToken };
