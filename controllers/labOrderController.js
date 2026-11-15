@@ -639,28 +639,23 @@ const collectorOnTheWay = async (req, res) => {
       const otpHash = hashLabOtp(otp);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      saveCollectionOtpForDemo(id, otp, expiresAt);
-
       order.collectionOtpHash = otpHash;
+      order.collectionOtpEncrypted = encryptLabOtp(otp);
       order.collectionOtpExpiresAt = expiresAt;
       order.collectionOtpAttempts = 0;
       order.collectionOtpVerified = false;
       order.collectionOtpSentAt = new Date();
-
-      console.log("==========================================");
-      console.log("NEW LAB COLLECTION OTP GENERATED");
-      console.log("ORDER ID:", id);
-      console.log("OTP:", otp);
-      console.log("EXPIRES AT:", expiresAt.toISOString());
-      console.log("==========================================");
     }
 
     await order.save();
+    const responseOrder = order.toObject();
+    delete responseOrder.collectionOtpHash;
+    delete responseOrder.collectionOtpEncrypted;
 
     return res.status(200).json({
       success: true,
       message: "Collector is on the way.",
-      order,
+      order: responseOrder,
     });
   } catch (error) {
     console.error("COLLECTOR ON WAY ERROR:", error);
@@ -1183,36 +1178,50 @@ const hashLabOtp = (otp) => {
   return crypto.createHash("sha256").update(otp).digest("hex");
 };
 
-// ==========================================================
-// DEMO OTP STORE
-// ==========================================================
-
-const collectionOtpStore = new Map();
-
-const saveCollectionOtpForDemo = (orderId, otp, expiresAt) => {
-  collectionOtpStore.set(String(orderId), {
-    otp: String(otp),
-    expiresAt: new Date(expiresAt).getTime(),
-  });
+const collectionOtpEncryptionKey = () => {
+  const secret = String(process.env.JWT_SECRET || "");
+  if (!secret) {
+    throw new Error("JWT_SECRET is required to protect collection OTPs.");
+  }
+  return crypto.createHash("sha256").update(secret).digest();
 };
 
-const getCollectionOtpFromDemoStore = (orderId) => {
-  const entry = collectionOtpStore.get(String(orderId));
-
-  if (!entry) {
-    return null;
-  }
-
-  if (Date.now() > entry.expiresAt) {
-    collectionOtpStore.delete(String(orderId));
-    return null;
-  }
-
-  return entry.otp;
+const encryptLabOtp = (otp) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    collectionOtpEncryptionKey(),
+    iv,
+  );
+  cipher.setAAD(Buffer.from("healthhome-lab-collection-otp:v1"));
+  const ciphertext = Buffer.concat([
+    cipher.update(String(otp), "utf8"),
+    cipher.final(),
+  ]);
+  return [
+    iv.toString("base64"),
+    cipher.getAuthTag().toString("base64"),
+    ciphertext.toString("base64"),
+  ].join(".");
 };
 
-const deleteCollectionOtpFromDemoStore = (orderId) => {
-  collectionOtpStore.delete(String(orderId));
+const decryptLabOtp = (encryptedOtp) => {
+  const [encodedIv, encodedTag, encodedCiphertext] = String(encryptedOtp || "").split(".");
+  if (!encodedIv || !encodedTag || !encodedCiphertext) {
+    throw new Error("Stored collection OTP is invalid.");
+  }
+
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    collectionOtpEncryptionKey(),
+    Buffer.from(encodedIv, "base64"),
+  );
+  decipher.setAAD(Buffer.from("healthhome-lab-collection-otp:v1"));
+  decipher.setAuthTag(Buffer.from(encodedTag, "base64"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encodedCiphertext, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
 };
 
 // ==========================================================
@@ -1223,7 +1232,9 @@ const generateCollectionOtp = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const labOrder = await LabOrder.findById(id).select("+collectionOtpHash");
+    const labOrder = await LabOrder.findById(id).select(
+      "+collectionOtpHash +collectionOtpEncrypted",
+    );
 
     if (!labOrder) {
       return res.status(404).json({
@@ -1254,12 +1265,12 @@ const generateCollectionOtp = async (req, res) => {
       labOrder.collectionOtpExpiresAt <= now
     ) {
       labOrder.collectionOtpHash = "";
+      labOrder.collectionOtpEncrypted = "";
       labOrder.collectionOtpExpiresAt = null;
       labOrder.collectionOtpAttempts = 0;
       labOrder.collectionOtpVerified = false;
       labOrder.collectionOtpSentAt = null;
 
-      deleteCollectionOtpFromDemoStore(id);
     }
 
     if (
@@ -1268,34 +1279,41 @@ const generateCollectionOtp = async (req, res) => {
       labOrder.collectionOtpExpiresAt > new Date() &&
       labOrder.collectionOtpVerified !== true
     ) {
-      const existingOtp = getCollectionOtpFromDemoStore(id);
-
-      if (!existingOtp) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "OTP is active but unavailable in server memory. Generate a new OTP.",
-          expiresAt: labOrder.collectionOtpExpiresAt,
-        });
+      if (labOrder.collectionOtpEncrypted) {
+        try {
+          decryptLabOtp(labOrder.collectionOtpEncrypted);
+          return res.status(200).json({
+            success: true,
+            message: "Existing OTP is still active.",
+            expiresAt: labOrder.collectionOtpExpiresAt,
+            alreadyActive: true,
+          });
+        } catch (decryptError) {
+          // Key rotation or malformed legacy data makes the old code
+          // unrecoverable. Rotate it below so the patient can get a fresh one.
+          console.warn("ACTIVE LAB OTP COULD NOT BE DECRYPTED; ROTATING", {
+            orderId: id,
+            reason: decryptError.message,
+          });
+        }
       }
 
-      return res.status(200).json({
-        success: true,
-        message: "Existing OTP is still active.",
-        collectionOtp: existingOtp,
-        expiresAt: labOrder.collectionOtpExpiresAt,
-        alreadyActive: true,
-        testingOnly: true,
-      });
+      // Legacy OTPs were kept in process memory and cannot be recovered
+      // after a restart. Clear and replace them with durable encrypted data.
+      labOrder.collectionOtpHash = "";
+      labOrder.collectionOtpEncrypted = "";
+      labOrder.collectionOtpExpiresAt = null;
+      labOrder.collectionOtpAttempts = 0;
+      labOrder.collectionOtpVerified = false;
+      labOrder.collectionOtpSentAt = null;
     }
 
     const otp = generateLabOtp();
     const otpHash = hashLabOtp(otp);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    saveCollectionOtpForDemo(id, otp, expiresAt);
-
     labOrder.collectionOtpHash = otpHash;
+    labOrder.collectionOtpEncrypted = encryptLabOtp(otp);
     labOrder.collectionOtpExpiresAt = expiresAt;
     labOrder.collectionOtpAttempts = 0;
     labOrder.collectionOtpVerified = false;
@@ -1303,17 +1321,15 @@ const generateCollectionOtp = async (req, res) => {
 
     await labOrder.save();
 
-    console.log("NEW LAB COLLECTION OTP GENERATED");
-    console.log("ORDER ID:", id);
-    console.log("EXPIRES AT:", expiresAt.toISOString());
+    console.log("NEW LAB COLLECTION OTP GENERATED", {
+      orderId: id,
+      expiresAt: expiresAt.toISOString(),
+    });
 
     return res.status(200).json({
       success: true,
       message: "OTP generated successfully.",
       expiresAt,
-      otpForTesting: otp,
-      collectionOtp: otp,
-      testingOnly: true,
     });
   } catch (error) {
     console.error("GENERATE COLLECTION OTP ERROR:", error);
@@ -1334,7 +1350,9 @@ const generateCollectionOtp = async (req, res) => {
 const getCollectionOtp = async (req, res) => {
   try {
     const { id } = req.params;
-    const labOrder = await LabOrder.findById(id).select("+collectionOtpHash");
+    const labOrder = await LabOrder.findById(id).select(
+      "+collectionOtpHash +collectionOtpEncrypted",
+    );
 
     if (!labOrder) {
       return res.status(404).json({
@@ -1388,8 +1406,6 @@ const getCollectionOtp = async (req, res) => {
     }
 
     if (new Date() > new Date(labOrder.collectionOtpExpiresAt)) {
-      deleteCollectionOtpFromDemoStore(id);
-
       return res.status(400).json({
         success: false,
         message: "Collection OTP has expired. Generate a new OTP.",
@@ -1397,14 +1413,22 @@ const getCollectionOtp = async (req, res) => {
       });
     }
 
-    const collectionOtp = getCollectionOtpFromDemoStore(id);
-
-    if (!collectionOtp) {
+    if (!labOrder.collectionOtpEncrypted) {
       return res.status(404).json({
         success: false,
         message:
-          "Collection OTP is no longer available in server memory. Generate a new OTP.",
-        testingOnly: true,
+          "This older OTP cannot be recovered. Ask the laboratory to generate a new OTP, then refresh this page.",
+      });
+    }
+
+    let collectionOtp;
+    try {
+      collectionOtp = decryptLabOtp(labOrder.collectionOtpEncrypted);
+    } catch (error) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This OTP can no longer be recovered. Ask the laboratory to generate a new OTP, then refresh this page.",
       });
     }
 
@@ -1412,7 +1436,6 @@ const getCollectionOtp = async (req, res) => {
       success: true,
       collectionOtp,
       collectionOtpExpiresAt: labOrder.collectionOtpExpiresAt,
-      testingOnly: true,
     });
   } catch (error) {
     console.error("GET COLLECTION OTP ERROR:", error);
@@ -1492,11 +1515,11 @@ const verifyCollectionOtp = async (req, res) => {
       labOrder.collectionOtpExpiresAt <= new Date()
     ) {
       labOrder.collectionOtpHash = "";
+      labOrder.collectionOtpEncrypted = "";
       labOrder.collectionOtpExpiresAt = null;
       labOrder.collectionOtpAttempts = 0;
       labOrder.collectionOtpSentAt = null;
 
-      deleteCollectionOtpFromDemoStore(id);
       await labOrder.save();
 
       return res.status(400).json({
@@ -1533,11 +1556,10 @@ const verifyCollectionOtp = async (req, res) => {
     labOrder.status = "Sample Collected";
     labOrder.collectorStatus = "Sample Collected";
     labOrder.collectionOtpHash = "";
+    labOrder.collectionOtpEncrypted = "";
     labOrder.collectionOtpExpiresAt = null;
     labOrder.collectionOtpAttempts = 0;
     labOrder.collectionOtpSentAt = null;
-
-    deleteCollectionOtpFromDemoStore(id);
 
     if (labOrder.collectorId) {
       await SampleCollector.findByIdAndUpdate(labOrder.collectorId, {

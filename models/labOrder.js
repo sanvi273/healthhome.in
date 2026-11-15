@@ -252,6 +252,15 @@ const labOrderSchema = new mongoose.Schema(
       select: false,
     },
 
+    // Encrypted with a key derived from JWT_SECRET so the patient can still
+    // retrieve an active OTP after an API restart or when another instance
+    // handles the request. The plaintext is never stored in MongoDB.
+    collectionOtpEncrypted: {
+      type: String,
+      default: "",
+      select: false,
+    },
+
     collectionOtpExpiresAt: {
       type: Date,
       default: null,
