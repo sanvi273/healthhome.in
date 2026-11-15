@@ -1100,6 +1100,34 @@ const uploadReport = async (req, res) => {
       });
     }
 
+    const supportedPhotoExtensions = new Set(["jpg", "jpeg", "png"]);
+    const supportedPhotoTypes = new Set([
+      "image/jpeg",
+      "image/png",
+      "image",
+    ]);
+    const hasUnsupportedReport = reportList.some((report) => {
+      const fileName = String(report?.fileName || "").trim().toLowerCase();
+      const extension = fileName.includes(".")
+        ? fileName.split(".").pop()
+        : "";
+      const fileType = String(report?.fileType || "")
+        .trim()
+        .toLowerCase();
+
+      return (
+        !supportedPhotoExtensions.has(extension) ||
+        !supportedPhotoTypes.has(fileType)
+      );
+    });
+
+    if (hasUnsupportedReport) {
+      return res.status(400).json({
+        success: false,
+        message: "Only JPG, JPEG, or PNG photo reports are supported.",
+      });
+    }
+
     const order = await LabOrder.findById(req.params.id);
 
     if (!order) {
