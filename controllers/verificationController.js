@@ -357,6 +357,28 @@ const uploadVerificationDocument = async (req, res) => {
       });
     }
 
+    const formFields = req.body || {};
+    let hasApplicationDetails = false;
+    if (Object.prototype.hasOwnProperty.call(formFields, "licenseNumber")) {
+      verification.licenseNumber = String(formFields.licenseNumber || "").trim();
+      hasApplicationDetails = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(formFields, "organizationName")) {
+      verification.organizationName = String(
+        formFields.organizationName || "",
+      ).trim();
+      hasApplicationDetails = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(formFields, "registrationNumber")) {
+      verification.registrationNumber = String(
+        formFields.registrationNumber || "",
+      ).trim();
+      hasApplicationDetails = true;
+    }
+    if (hasApplicationDetails) {
+      await verification.save();
+    }
+
     const documentType = String(req.body?.type || "Verification document").trim();
     const contentHash = crypto
       .createHash("sha256")
