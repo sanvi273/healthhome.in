@@ -62,7 +62,9 @@ router.get("/all", getLabOrders);
 // Keep these routes before the generic /:id route.
 // ==========================================================
 
-router.get("/collection-otp/:id", authMiddleware, approvedLaboratory, getCollectionOtp);
+// The patient who owns the booking must be able to see the OTP to share it
+// with the arriving sample collector. The controller checks order ownership.
+router.get("/collection-otp/:id", authMiddleware, getCollectionOtp);
 
 router.post(
   "/generate-collection-otp/:id",

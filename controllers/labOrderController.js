@@ -1343,6 +1343,18 @@ const getCollectionOtp = async (req, res) => {
       });
     }
 
+    const patient = await User.findById(req.user?.id).select("role");
+    if (
+      !patient ||
+      patient.role !== "patient" ||
+      String(labOrder.patientId) !== String(patient._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to access this collection OTP.",
+      });
+    }
+
     if (labOrder.collectionMode !== "Home Collection") {
       return res.status(400).json({
         success: false,
