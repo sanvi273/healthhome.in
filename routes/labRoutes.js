@@ -2,6 +2,8 @@ const express = require("express");
 
 const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware");
+const verificationMiddleware = require("../middleware/verificationMiddleware");
+const approvedLaboratory = verificationMiddleware(["laboratory"]);
 const {
   addLab,
   getLabs,
@@ -28,6 +30,7 @@ router.get(
 router.post(
   "/add",
   authMiddleware,
+  approvedLaboratory,
   addLab
 );
 
@@ -54,6 +57,8 @@ router.get(
 
 router.post(
   "/tests/add",
+  authMiddleware,
+  approvedLaboratory,
   addLabTest
 );
 
@@ -78,6 +83,8 @@ router.get(
 
 router.put(
   "/tests/:id",
+  authMiddleware,
+  approvedLaboratory,
   updateLabTest
 );
 
@@ -86,6 +93,8 @@ router.put(
 
 router.delete(
   "/tests/:id",
+  authMiddleware,
+  approvedLaboratory,
   deleteLabTest
 );
 
@@ -94,6 +103,8 @@ router.delete(
 
 router.put(
   "/tests/toggle/:id",
+  authMiddleware,
+  approvedLaboratory,
   toggleLabTest
 );
 

@@ -1,6 +1,8 @@
 
 const express = require("express");
 const authMiddleware = require("../middleware/authMiddleware");
+const verificationMiddleware = require("../middleware/verificationMiddleware");
+const approvedLaboratory = verificationMiddleware(["laboratory"]);
 const router = express.Router();
 
 const {
@@ -49,6 +51,7 @@ router.post("/add", authMiddleware, addLabOrder);
 router.post(
   "/cod/collect/:id",
   authMiddleware,
+  approvedLaboratory,
   collectLabCODPayment
 );
 
@@ -59,15 +62,19 @@ router.get("/all", getLabOrders);
 // Keep these routes before the generic /:id route.
 // ==========================================================
 
-router.get("/collection-otp/:id", getCollectionOtp);
+router.get("/collection-otp/:id", authMiddleware, approvedLaboratory, getCollectionOtp);
 
 router.post(
   "/generate-collection-otp/:id",
+  authMiddleware,
+  approvedLaboratory,
   generateCollectionOtp
 );
 
 router.post(
   "/verify-collection-otp/:id",
+  authMiddleware,
+  approvedLaboratory,
   verifyCollectionOtp
 );
 
@@ -98,6 +105,8 @@ router.put(
 
 router.put(
   "/reschedule/:id/decision",
+  authMiddleware,
+  approvedLaboratory,
   decideLabReschedule
 );
 
@@ -108,6 +117,8 @@ router.put(
 
 router.put(
   "/reschedule/:id/propose",
+  authMiddleware,
+  approvedLaboratory,
   proposeLabReschedule
 );
 
@@ -129,39 +140,51 @@ router.put(
 // LABORATORY BOOKING WORKFLOW
 // ==========================================================
 
-router.put("/accept/:id", acceptLabOrder);
+router.put("/accept/:id", authMiddleware, approvedLaboratory, acceptLabOrder);
 
 // Legacy endpoint retained for compatibility.
 // The updated dashboard should use Reschedule instead.
-router.put("/reject/:id", rejectLabOrder);
+router.put("/reject/:id", authMiddleware, approvedLaboratory, rejectLabOrder);
 
 router.put(
   "/assign-collector/:id",
+  authMiddleware,
+  approvedLaboratory,
   assignSampleCollector
 );
 
 router.put(
   "/collector-on-the-way/:id",
+  authMiddleware,
+  approvedLaboratory,
   collectorOnTheWay
 );
 
 router.put(
   "/sample-collected/:id",
+  authMiddleware,
+  approvedLaboratory,
   markSampleCollected
 );
 
 router.put(
   "/sample-received/:id",
+  authMiddleware,
+  approvedLaboratory,
   markSampleReceived
 );
 
 router.put(
   "/start-testing/:id",
+  authMiddleware,
+  approvedLaboratory,
   startTesting
 );
 
 router.put(
   "/status/:id",
+  authMiddleware,
+  approvedLaboratory,
   updateLabOrderStatus
 );
 
@@ -169,7 +192,7 @@ router.put(
 // UPLOAD LAB REPORT
 // ==========================================================
 
-router.put("/report/:id", uploadReport);
+router.put("/report/:id", authMiddleware, approvedLaboratory, uploadReport);
 
 
 // ==========================================================
@@ -180,6 +203,7 @@ router.put("/report/:id", uploadReport);
 router.put(
   "/prescription-payment/amount/:id",
   authMiddleware,
+  approvedLaboratory,
   setPrescriptionLabAmount
 );
 

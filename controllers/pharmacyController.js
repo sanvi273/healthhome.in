@@ -1,6 +1,13 @@
 const Pharmacy = require("../models/pharmacy");
 const User = require("../models/user");
 
+const normalizePhoneForOwnership = (value) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.startsWith("91") && digits.length === 12
+    ? digits.slice(2)
+    : digits;
+};
+
 // ============================================================
 // ADD PHARMACY
 // ============================================================
@@ -29,6 +36,22 @@ const addPharmacy = async (req, res) => {
     }
 
     const pharmacyPhone = phone.toString().trim();
+    const account = await User.findById(req.user?.id).select(
+      "phone role verificationStatus"
+    );
+    if (
+      !account ||
+      account.role !== "pharmacy" ||
+      account.verificationStatus !== "APPROVED" ||
+      normalizePhoneForOwnership(account.phone) !==
+        normalizePhoneForOwnership(pharmacyPhone)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Only the approved pharmacy account owner can create this pharmacy profile.",
+      });
+    }
 
     const existingPharmacy = await Pharmacy.findOne({
       phone: pharmacyPhone,
@@ -43,6 +66,7 @@ const addPharmacy = async (req, res) => {
     }
 
     const pharmacy = new Pharmacy({
+      userId: account._id,
       name: name.toString().trim(),
       shopType: shopType.toString().trim(),
       experience: experience.toString().trim(),

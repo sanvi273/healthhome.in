@@ -350,6 +350,17 @@ const initiateRegistration = async (req, res) => {
     };
     await incrementRateLimit("phone", normalizedPhone, 5);
     const { user, professional } = await createRegisteredAccount(registrationData, termsAcceptance._id);
+    const token = professional
+      ? jwt.sign(
+          {
+            id: user._id,
+            role: user.role,
+            verificationStatus: user.verificationStatus,
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: "7d" },
+        )
+      : undefined;
     return res.status(201).json({
       success: true,
       registered: true,
@@ -366,6 +377,7 @@ const initiateRegistration = async (req, res) => {
         verificationStatus: user.verificationStatus,
         verificationId: user.verificationId,
       },
+      ...(token ? { token } : {}),
     });
   } catch (error) {
     if (error.message === "OTP_RATE_LIMIT") return rateLimited(res);

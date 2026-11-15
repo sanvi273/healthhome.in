@@ -1,4 +1,7 @@
 const express = require("express");
+const authMiddleware = require("../middleware/authMiddleware");
+const verificationMiddleware = require("../middleware/verificationMiddleware");
+const approvedPharmacy = verificationMiddleware(["pharmacy"]);
 
 const router = express.Router();
 
@@ -57,6 +60,8 @@ console.log("========================================");
 
 router.post(
   "/add",
+  authMiddleware,
+  approvedPharmacy,
   (req, res) => {
     return pharmacyController.addPharmacy(req, res);
   }
@@ -79,6 +84,8 @@ router.get(
 
 router.get(
   "/:phone/delivery-partners",
+  authMiddleware,
+  approvedPharmacy,
   (req, res) => {
     return pharmacyController.getDeliveryPartners(
       req,
@@ -91,6 +98,8 @@ router.get(
 
 router.post(
   "/:phone/delivery-partners",
+  authMiddleware,
+  approvedPharmacy,
   (req, res) => {
     return pharmacyController.addDeliveryPartner(
       req,
@@ -103,6 +112,8 @@ router.post(
 
 router.delete(
   "/:phone/delivery-partners/:partnerId",
+  authMiddleware,
+  approvedPharmacy,
   (req, res) => {
     return pharmacyController.deleteDeliveryPartner(
       req,

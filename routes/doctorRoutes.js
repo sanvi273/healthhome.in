@@ -10,6 +10,8 @@ const {
 } = require("../controllers/doctorController");
 
 const authMiddleware = require("../middleware/authMiddleware");
+const verificationMiddleware = require("../middleware/verificationMiddleware");
+const approvedDoctor = verificationMiddleware(["doctor"]);
 
 // ================= TEST ROUTE =================
 
@@ -21,7 +23,7 @@ router.get("/test", (req, res) => {
 // Authenticated doctor only. Pending doctors may save their profile,
 // but the controller does not grant them approved-only operations.
 
-router.post("/add", authMiddleware, addDoctor);
+router.post("/add", authMiddleware, approvedDoctor, addDoctor);
 
 // ================= GET ALL APPROVED DOCTORS =================
 // Public patient-facing endpoint; controller filters to approved users.
@@ -38,6 +40,7 @@ router.get("/profile/:phone", getDoctorProfile);
 router.put(
   "/availability/:doctorId",
   authMiddleware,
+  approvedDoctor,
   updateDoctorAvailability
 );
 
@@ -47,6 +50,7 @@ router.put(
 router.put(
   "/schedule/:doctorId",
   authMiddleware,
+  approvedDoctor,
   updateDoctorSchedule
 );
 

@@ -1,5 +1,7 @@
 const express = require("express");
 const authMiddleware = require("../middleware/authMiddleware");
+const verificationMiddleware = require("../middleware/verificationMiddleware");
+const approvedPharmacy = verificationMiddleware(["pharmacy"]);
 
 const router = express.Router();
 
@@ -62,6 +64,7 @@ router.post(
 router.put(
   "/prescription/confirm/:id",
   authMiddleware,
+  approvedPharmacy,
   confirmPrescriptionOrder
 );
 
@@ -81,6 +84,7 @@ router.get(
 router.get(
   "/pharmacy/:pharmacyId",
   authMiddleware,
+  approvedPharmacy,
   getPharmacyOrders
 );
 
@@ -116,6 +120,8 @@ router.get(
 
 router.put(
   "/status/:id",
+  authMiddleware,
+  approvedPharmacy,
   updateOrderStatus
 );
 
@@ -125,6 +131,8 @@ router.put(
 
 router.put(
   "/delivery-agent/:id",
+  authMiddleware,
+  approvedPharmacy,
   assignDeliveryAgent
 );
 
@@ -134,6 +142,8 @@ router.put(
 
 router.put(
   "/delivery-agent/remove/:id",
+  authMiddleware,
+  approvedPharmacy,
   removeDeliveryAgent
 );
 
@@ -191,6 +201,8 @@ router.get(
 
 router.put(
   "/delivery-otp/:id",
+  authMiddleware,
+  approvedPharmacy,
   verifyDeliveryOtp
 );
 
@@ -205,6 +217,8 @@ router.put(
 
 router.put(
   "/cod/collect/:id",
+  authMiddleware,
+  approvedPharmacy,
   collectCODPayment
 );
 

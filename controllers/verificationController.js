@@ -226,12 +226,26 @@ const createVerification = async (req, res) => {
       });
     }
 
-    user.verificationStatus = "PENDING";
+    if (!String(verification.licenseNumber || "").trim() ||
+        !Array.isArray(verification.documents) ||
+        verification.documents.length === 0 ||
+        verification.documents.some((document) => !String(document.url || "").trim())) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter your license number and upload at least one verification document before submitting for review.",
+      });
+    }
+
+    // The applicant has completed the form and sent it to Admin. Keep it in
+    // the review queue and show the same status to the applicant.
+    verification.status = "UNDER_REVIEW";
+    user.verificationStatus = "UNDER_REVIEW";
+    await verification.save();
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message: "Verification application submitted successfully",
+      message: "Verification application submitted to Admin for review",
       verification,
     });
   } catch (error) {
@@ -703,6 +717,16 @@ const approveVerification = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Associated user not found",
+      });
+    }
+
+    if (!String(verification.licenseNumber || "").trim() ||
+        !Array.isArray(verification.documents) ||
+        verification.documents.length === 0 ||
+        verification.documents.some((document) => !String(document.url || "").trim())) {
+      return res.status(400).json({
+        success: false,
+        message: "This application needs a license number and at least one uploaded verification document before approval.",
       });
     }
 

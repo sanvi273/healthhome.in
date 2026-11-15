@@ -1932,10 +1932,24 @@ const proposeLabReschedule = async (req, res) => {
       });
     }
 
-    if (order.rescheduleStatus === "Pending") {
+    const rescheduleIsPending = order.rescheduleStatus === "Pending";
+    const proposer = String(order.rescheduleProposedBy || "");
+    const patientAskedForAnotherTime =
+      rescheduleIsPending &&
+      (proposer === "Patient" || proposer === "") &&
+      !order.requestedScheduledAt;
+
+    // A patient can ask the lab to send another time after declining a
+    // proposal. Replace that counter-request with the lab's new proposal.
+    // Keep a specific patient time request or an unanswered lab proposal
+    // pending until it is approved, rejected, or answered by the patient.
+    if (rescheduleIsPending && !patientAskedForAnotherTime) {
       return res.status(409).json({
         success: false,
-        message: "A reschedule request is already pending.",
+        message:
+          proposer === "Laboratory"
+            ? "A laboratory proposal is already awaiting the patient's response."
+            : "A patient-proposed time is pending. Approve or reject it before sending another proposal.",
       });
     }
 
