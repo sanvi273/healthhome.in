@@ -29,6 +29,8 @@ const addToCart = async (req, res) => {
 
       medicineId: medicine._id,
       medicine: medicine.medicineName,
+      prescriptionId: String(req.body.prescriptionId || "").trim(),
+      prescriptionMedicineId: String(req.body.prescriptionMedicineId || "").trim(),
 
       dose: req.body.dose,
       duration: req.body.duration,

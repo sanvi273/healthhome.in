@@ -17,6 +17,18 @@ required:true
       default: "",
     },
 
+    // Source link used to show per-medicine completion on the patient's
+    // prescription. Ordinary pharmacy cart items leave these fields empty.
+    prescriptionId: {
+      type: String,
+      default: "",
+    },
+
+    prescriptionMedicineId: {
+      type: String,
+      default: "",
+    },
+
     medicine: {
       type: String,
       required: true,

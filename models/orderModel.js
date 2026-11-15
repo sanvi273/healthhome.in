@@ -16,6 +16,16 @@ const medicineItemSchema = new mongoose.Schema(
       default: "",
     },
 
+    prescriptionId: {
+      type: String,
+      default: "",
+    },
+
+    prescriptionMedicineId: {
+      type: String,
+      default: "",
+    },
+
     quantity: {
       type: Number,
       required: true,
@@ -107,6 +117,11 @@ const orderSchema = new mongoose.Schema(
     },
 
     prescriptionImage: {
+      type: String,
+      default: "",
+    },
+
+    prescriptionId: {
       type: String,
       default: "",
     },

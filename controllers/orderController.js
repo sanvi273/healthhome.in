@@ -5,6 +5,13 @@ const Medicine = require("../models/medicine");
 const Pharmacy = require("../models/pharmacy");
 const User = require("../models/user");
 
+const escapeRegExp = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const normalizePhone = (value) =>
+  String(value || "").replace(/\D/g, "").slice(-10);
+const normalizeMedicineName = (value) =>
+  String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+
 // ============================================================
 // HELPER: NORMALIZE PAYMENT METHOD
 // ============================================================
@@ -629,8 +636,10 @@ const placeOrder = async (
     for (
       const item of medicines
     ) {
-      const medicineId =
-        item.medicineId;
+      const medicineId = String(item.medicineId || "").trim();
+      const requestedMedicineName = String(
+        item.medicineName || item.medicine || ""
+      ).trim();
 
       const quantity =
         Number(
@@ -638,7 +647,6 @@ const placeOrder = async (
         );
 
       if (
-        !medicineId ||
         !Number.isInteger(
           quantity
         ) ||
@@ -646,54 +654,83 @@ const placeOrder = async (
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "Invalid medicine ID or quantity.",
+          message: "Invalid medicine quantity.",
         });
       }
 
       let medicine = null;
 
-      try {
+      if (medicineId) {
+        try {
+          medicine = await Medicine.findById(medicineId);
+        } catch (_error) {
+          // A prescription may contain an old or pharmacy-specific ID.
+          // Resolve by exact name in the pharmacy selected at checkout.
+          medicine = null;
+        }
+      }
+
+      const belongsToSelectedPharmacy =
+        medicine &&
+        normalizePhone(medicine.pharmacyPhone) !== "" &&
+        normalizePhone(medicine.pharmacyPhone) === normalizePhone(pharmacy.phone) &&
+        (!requestedMedicineName ||
+          normalizeMedicineName(medicine.medicineName) ===
+            normalizeMedicineName(requestedMedicineName)) &&
+        Number(medicine.stock) >= quantity &&
+        (!String(medicine.status || "").trim() ||
+          String(medicine.status).trim().toLowerCase() === "available");
+
+      if (!belongsToSelectedPharmacy) {
+        if (!requestedMedicineName || !String(pharmacy.phone || "").trim()) {
+          return res.status(404).json({
+            success: false,
+            message: `${requestedMedicineName || "Medicine"} was not found in the selected pharmacy.`,
+          });
+        }
+
+        const pharmacyMatches = await Medicine.find({
+          medicineName: {
+            $regex: new RegExp(
+              `^${escapeRegExp(requestedMedicineName.trim().replace(/\s+/g, " ")).replace(/ /g, "\\s+")}$`,
+              "i",
+            ),
+          },
+        }).sort({ stock: -1, createdAt: -1 });
+        const selectedPharmacyMatches = pharmacyMatches.filter((candidate) =>
+          normalizePhone(candidate.pharmacyPhone) === normalizePhone(pharmacy.phone),
+        );
+
+        // Prefer a matching record that is available and has stock.
         medicine =
-          await Medicine.findById(
-            medicineId
-          );
-      } catch (error) {
-        return res.status(400).json({
-          success: false,
-          message:
-            `Invalid medicine ID: ${medicineId}`,
-        });
+          selectedPharmacyMatches.find((candidate) => {
+            const candidateStatus = String(candidate.status || "")
+              .trim()
+              .toLowerCase();
+            return Number(candidate.stock) >= quantity &&
+              (!candidateStatus || candidateStatus === "available");
+          }) ||
+          selectedPharmacyMatches.find((candidate) => {
+            const candidateStatus = String(candidate.status || "")
+              .trim()
+              .toLowerCase();
+            return Number(candidate.stock) > 0 &&
+              (!candidateStatus || candidateStatus === "available");
+          }) ||
+          selectedPharmacyMatches[0] ||
+          null;
       }
 
       if (!medicine) {
         return res.status(404).json({
           success: false,
-          message:
-            `Medicine not found: ${medicineId}`,
+          message: `${requestedMedicineName || "Medicine"} was not found in the selected pharmacy.`,
         });
       }
 
       // ------------------------------------------------------
       // CHECK PHARMACY
       // ------------------------------------------------------
-
-      if (
-        pharmacy.phone &&
-        medicine.pharmacyPhone &&
-        String(
-          medicine.pharmacyPhone
-        ).trim() !==
-          String(
-            pharmacy.phone
-          ).trim()
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            `${medicine.medicineName} does not belong to the selected pharmacy.`,
-        });
-      }
 
       // ------------------------------------------------------
       // STOCK
@@ -753,6 +790,12 @@ const placeOrder = async (
         medicineName:
           medicine.medicineName,
 
+        prescriptionId:
+          String(item.prescriptionId || "").trim(),
+
+        prescriptionMedicineId:
+          String(item.prescriptionMedicineId || "").trim(),
+
         quantity,
 
         price:
@@ -783,6 +826,21 @@ const placeOrder = async (
         totalAmount -
           platformFee
       );
+
+    const linkedPrescriptionIds = [
+      ...new Set(
+        verifiedMedicines
+          .map((item) => item.prescriptionId)
+          .filter(Boolean),
+      ),
+    ];
+    const orderPrescriptionId =
+      linkedPrescriptionIds.length === 1 &&
+      verifiedMedicines.every(
+        (item) => item.prescriptionId === linkedPrescriptionIds[0],
+      )
+        ? linkedPrescriptionIds[0]
+        : "";
 
     // ========================================================
     // CREATE ORDER
@@ -832,6 +890,9 @@ const placeOrder = async (
         prescriptionImage:
           prescriptionImage ||
           "",
+
+        prescriptionId:
+          orderPrescriptionId,
 
         medicines:
           verifiedMedicines,
