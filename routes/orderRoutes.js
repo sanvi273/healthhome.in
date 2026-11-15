@@ -61,6 +61,7 @@ router.post(
 
 router.put(
   "/prescription/confirm/:id",
+  authMiddleware,
   confirmPrescriptionOrder
 );
 

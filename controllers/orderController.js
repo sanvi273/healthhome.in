@@ -10,18 +10,40 @@ const User = require("../models/user");
 // ============================================================
 
 const normalizePaymentMethod = (paymentMethod) => {
+  const normalized = String(paymentMethod ?? "")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+
   if (
-    paymentMethod === "ONLINE" ||
-    paymentMethod === "COD"
+    [
+      "online",
+      "online payment",
+      "upi",
+      "net banking",
+      "netbanking",
+      "ऑनलाइन",
+      "ऑनलाइन भुगतान",
+      "ઓનલાઇન",
+      "ઓનલાઇન ચુકવણી",
+    ].includes(normalized)
   ) {
-    return paymentMethod;
+    return "ONLINE";
   }
 
-  if (paymentMethod === "Cash on Delivery") {
+  if (
+    [
+      "cod",
+      "cash on delivery",
+      "कैश ऑन डिलीवरी",
+      "કેશ ઑન ડિલિવરી",
+    ].includes(normalized)
+  ) {
     return "COD";
   }
 
-  return "COD";
+  return null;
 };
 
 // ============================================================
@@ -588,6 +610,14 @@ const placeOrder = async (
         paymentMethod
       );
 
+    if (!finalPaymentMethod) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Unsupported payment method. Choose online payment or cash on delivery.",
+      });
+    }
+
     // ========================================================
     // VERIFY MEDICINES
     // ========================================================
@@ -1114,17 +1144,18 @@ const placePrescriptionOrder =
 
           medicines: [],
 
-          // Prescription processing fee
-          subtotal: 500,
+          // The pharmacy sets the actual medicine total after
+          // reviewing the prescription and selecting inventory.
+          subtotal: 0,
 
           deliveryFee: 0,
 
           discount: 0,
 
-          totalAmount: 500,
+          totalAmount: 0,
 
           paymentMethod:
-            "ONLINE",
+            "COD",
 
           paymentStatus:
             "Pending",
@@ -1322,6 +1353,30 @@ const confirmPrescriptionOrder =
           success: false,
           message:
             "Prescription can only be confirmed while the order is Pending or Accepted.",
+        });
+      }
+
+      // Only the pharmacy that owns this order may confirm its
+      // medicines and pricing.
+      const user = await User.findById(req.user?.id);
+      if (!user || user.role !== "pharmacy") {
+        return res.status(403).json({
+          success: false,
+          message: "Pharmacy account required.",
+        });
+      }
+
+      const pharmacy = await Pharmacy.findOne({
+        _id: order.pharmacyId,
+        $or: [
+          { userId: user._id },
+          { phone: user.phone },
+        ],
+      });
+      if (!pharmacy) {
+        return res.status(403).json({
+          success: false,
+          message: "This prescription order belongs to another pharmacy.",
         });
       }
 
@@ -1565,6 +1620,10 @@ const confirmPrescriptionOrder =
 
       order.totalAmount =
         totalAmount;
+
+      // Prescription uploads state that payment is collected on delivery.
+      order.paymentMethod = "COD";
+      order.paymentStatus = "Pending";
 
       order.providerAmount =
         providerAmount;
