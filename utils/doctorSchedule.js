@@ -190,11 +190,13 @@ const validateDoctorSlot = async ({
     appointmentDate: date,
     status: { $in: ["Pending", "Upcoming", "Accepted"] },
     ...(excludeAppointmentId ? { _id: { $ne: excludeAppointmentId } } : {}),
-  }).select("appointmentTime consultationType");
+  }).select("appointmentTime consultationType paymentStatus status");
 
   const dailyAppointments = activeAppointments.filter((appointment) =>
     normalizeConsultationType(appointment.consultationType) ===
-      normalizeConsultationType(consultationType)
+      normalizeConsultationType(consultationType) &&
+      (normalizeConsultationType(consultationType) !== "Video Consultation" ||
+        appointment.paymentStatus === "Paid")
   );
   const dailyLimit = Number(doctor.consultationSchedules?.[scheduleKeyForType(consultationType)]?.maxAppointmentsPerDay || doctor.maxAppointmentsPerDay || 10);
   if (dailyAppointments.length >= dailyLimit) {

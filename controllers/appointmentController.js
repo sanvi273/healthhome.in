@@ -594,10 +594,11 @@ exports.getAvailableSlots = async (req, res) => {
       doctorId,
       appointmentDate,
       status: { $in: ["Pending", "Upcoming", "Accepted"] },
-    }).select("appointmentTime consultationType");
+    }).select("appointmentTime consultationType paymentStatus status");
 
     const appointmentsForType = bookedAppointments.filter((appointment) =>
-      normalizeConsultationType(appointment.consultationType) === consultationType
+      normalizeConsultationType(appointment.consultationType) === consultationType &&
+      (consultationType !== "Video Consultation" || appointment.paymentStatus === "Paid")
     );
     const scheduleKey = consultationType === "Video Consultation" ? "videoConsultation" : "hospitalVisit";
     const dailyLimit = Number(
@@ -612,7 +613,16 @@ exports.getAvailableSlots = async (req, res) => {
         const bookedStart = parseAppointmentTime(appointment.appointmentTime);
         const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType, appointmentDate);
         const bookedDuration = bookedConfig?.duration || config.duration;
-        return bookedStart === null ? null : [bookedStart, bookedStart + bookedDuration];
+        if (bookedStart === null) return null;
+        const isAwaitingPayment =
+          normalizeConsultationType(appointment.consultationType) === "Video Consultation" &&
+          appointment.paymentStatus !== "Paid" &&
+          appointment.status === "Pending";
+        return {
+          start: bookedStart,
+          end: bookedStart + bookedDuration,
+          reason: isAwaitingPayment ? "payment_pending" : "booked",
+        };
       })
       .filter(Boolean);
 
@@ -626,13 +636,15 @@ exports.getAvailableSlots = async (req, res) => {
         time < config.breakEnd && slotEnd > config.breakStart;
       if (overlapsBreak) continue;
 
-      const isBooked = bookedRanges.some(([bookedStart, bookedEnd]) =>
-        bookedStart < slotEnd && bookedEnd > time
+      const overlappingReservation = bookedRanges.find(({ start, end }) =>
+        start < slotEnd && end > time
       );
+      const isBooked = Boolean(overlappingReservation);
       slots.push({
         time: formatAppointmentTime(time),
         available: !dailyLimitReached && !isBooked,
-        unavailableReason: isBooked ? "booked" : dailyLimitReached ? "daily_limit" : null,
+        unavailableReason: overlappingReservation?.reason ||
+          (dailyLimitReached ? "daily_limit" : null),
       });
     }
 
@@ -848,7 +860,20 @@ exports.getDoctorAppointments =
 
       const appointments =
 
-        await Appointment.find({ $or: appointmentConditions }).sort({
+        await Appointment.find({
+          $and: [
+            { $or: appointmentConditions },
+            // A video appointment is not a doctor-facing booking until
+            // Razorpay confirms payment. Unpaid checkout records remain
+            // internal short-lived holds and are not actionable by doctors.
+            {
+              $or: [
+                { consultationType: { $ne: "Video Consultation" } },
+                { paymentStatus: "Paid" },
+              ],
+            },
+          ],
+        }).sort({
 
           createdAt: -1,
 
