@@ -1,6 +1,7 @@
 const Appointment = require("../models/Appointment");
 const VideoCallSession = require("../models/VideoCallSession");
 const User = require("../models/user");
+const FamilyMember = require("../models/FamilyMember");
 const Payment = require("../models/Payment");
 
 const {
@@ -1120,9 +1121,30 @@ exports.getPatientAppointments =
           message: "You can only view your own appointments",
         });
       }
-      const appointments = await Appointment.find({
-        patientPhone: { $in: phoneVariants },
-      }).sort({
+      const familyMemberId = req.query.familyMemberId?.toString().trim() ?? "";
+      let appointmentFilter;
+      if (familyMemberId) {
+        if (!/^[a-f\d]{24}$/i.test(familyMemberId)) {
+          return res.status(400).json({ success: false, message: "Invalid family member ID." });
+        }
+        const familyMember = await FamilyMember.findOne({
+          _id: familyMemberId,
+          patientId: authenticatedUser._id,
+        }).select("_id");
+        if (!familyMember) {
+          return res.status(404).json({ success: false, message: "Family member not found." });
+        }
+        appointmentFilter = {
+          patientId: authenticatedUser._id,
+          familyMemberId: familyMember._id,
+        };
+      } else {
+        appointmentFilter = {
+          patientPhone: { $in: phoneVariants },
+          familyMemberId: null,
+        };
+      }
+      const appointments = await Appointment.find(appointmentFilter).sort({
 
           createdAt: -1,
 

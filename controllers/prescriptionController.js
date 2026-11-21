@@ -1,6 +1,7 @@
 console.log("🔥 CONTROLLER LOADED");
 
 const PDFDocument = require("pdfkit");
+const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
 
@@ -433,7 +434,23 @@ const savePrescription = async (
 
     const data = {
       ...req.body,
+      familyMemberId: "",
     };
+
+    const appointmentId = String(data.appointmentId || "").trim();
+    if (mongoose.isValidObjectId(appointmentId)) {
+      const appointment = await Appointment.findById(appointmentId).select(
+        "patientId patientPhone patientName familyMemberId doctorId",
+      );
+      if (appointment) {
+        data.patientId = appointment.patientPhone || data.patientId || "";
+        data.patientPhone = appointment.patientPhone || data.patientPhone || "";
+        data.patientName = appointment.patientName || data.patientName || "";
+        data.familyMemberId = appointment.familyMemberId
+          ? String(appointment.familyMemberId)
+          : "";
+      }
+    }
 
 
     // --------------------------------------------------------
@@ -691,6 +708,7 @@ const getPatientPrescriptions =
         await Prescription.find({
           patientId:
             req.params.patientId,
+          familyMemberId: { $in: ["", null] },
         })
         .sort({
           createdAt: -1,

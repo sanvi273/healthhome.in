@@ -5,6 +5,7 @@ const Razorpay = require("razorpay");
 const Payment = require("../models/Payment");
 const Order = require("../models/orderModel");
 const Appointment = require("../models/Appointment");
+const FamilyMember = require("../models/FamilyMember");
 const User = require("../models/user");
 const Doctor = require("../models/doctor");
 const uploadToCloudinary = require("../utils/cloudinaryUpload");
@@ -747,9 +748,32 @@ exports.createDoctorOrder = async (req, res) => {
       consultationType,
       appointmentDate,
       appointmentTime,
+      familyMemberId: requestedFamilyMemberId,
     } = req.body;
-    const patientName = safeString(authenticatedUser.name);
+    let patientName = safeString(authenticatedUser.name);
     const patientPhone = safeString(authenticatedUser.phone);
+    let familyMemberId = null;
+
+    if (requestedFamilyMemberId) {
+      if (!isValidObjectId(requestedFamilyMemberId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid family member ID.",
+        });
+      }
+      const familyMember = await FamilyMember.findOne({
+        _id: requestedFamilyMemberId,
+        patientId: authenticatedUser._id,
+      }).select("_id name");
+      if (!familyMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Family member was not found in your account.",
+        });
+      }
+      patientName = safeString(familyMember.name);
+      familyMemberId = familyMember._id;
+    }
 
     if (!doctorId || !appointmentDate || !appointmentTime) {
       return res.status(400).json({
@@ -804,6 +828,7 @@ exports.createDoctorOrder = async (req, res) => {
       : "ONLINE";
     const appointment = await Appointment.create({
       patientId: authenticatedUser._id,
+      familyMemberId,
       patientName,
       patientPhone,
       doctorId: String(doctorId),

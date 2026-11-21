@@ -1,5 +1,9 @@
 const mongoose = require("mongoose");
 const FamilyMember = require("../models/FamilyMember");
+const Appointment = require("../models/Appointment");
+const Order = require("../models/orderModel");
+const LabOrder = require("../models/labOrder");
+const Prescription = require("../models/prescriptionModel");
 const User = require("../models/user");
 
 const RELATIONSHIPS = new Set([
@@ -29,7 +33,7 @@ const TEXT_LIMITS = {
 class InputValidationError extends Error {}
 
 const patientForRequest = async (req) => {
-  const user = await User.findById(req.user?.id).select("_id role");
+  const user = await User.findById(req.user?.id).select("_id role phone");
   return user?.role === "patient" ? user : null;
 };
 
@@ -107,6 +111,55 @@ exports.getMyFamilyMembers = async (req, res) => {
   } catch (error) {
     console.error("LOAD FAMILY MEMBERS FAILED", error.name || "DatabaseError");
     return res.status(500).json({ success: false, message: "Unable to load family members." });
+  }
+};
+
+exports.getFamilyMemberOverview = async (req, res) => {
+  try {
+    const patient = await patientForRequest(req);
+    if (!patient) {
+      return res.status(403).json({ success: false, message: "Patient account required." });
+    }
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid family member ID." });
+    }
+    const familyMember = await FamilyMember.findOne({
+      _id: req.params.id,
+      patientId: patient._id,
+    });
+    if (!familyMember) {
+      return res.status(404).json({ success: false, message: "Family member not found." });
+    }
+
+    const ownerId = String(patient._id);
+    const memberId = String(familyMember._id);
+    const [appointments, medicineOrders, labOrders, prescriptions] = await Promise.all([
+      Appointment.find({ patientId: patient._id, familyMemberId: familyMember._id })
+        .sort({ createdAt: -1 }),
+      Order.find({ patientId: ownerId, familyMemberId: memberId })
+        .sort({ createdAt: -1 }),
+      LabOrder.find({ patientId: ownerId, familyMemberId: memberId })
+        .sort({ createdAt: -1 }),
+      Prescription.find({
+        patientPhone: patient.phone,
+        familyMemberId: memberId,
+      }).sort({ createdAt: -1 }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      familyMember,
+      appointments,
+      medicineOrders,
+      labOrders,
+      prescriptions,
+    });
+  } catch (error) {
+    console.error("LOAD FAMILY MEMBER OVERVIEW FAILED", error.name || "DatabaseError");
+    return res.status(500).json({
+      success: false,
+      message: "Unable to load this family member's health records.",
+    });
   }
 };
 

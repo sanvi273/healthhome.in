@@ -12,6 +12,13 @@ required:true
       default: "",
     },
 
+    familyMemberId: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
     medicineId: {
       type: String,
       default: "",
