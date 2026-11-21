@@ -18,6 +18,7 @@ const {
   getAppointmentById,
   updateAppointmentStatus,
   updatePaymentStatus,
+  collectHospitalVisitPayment,
   deleteAppointment,
   startConsultation,
   joinConsultation,
@@ -147,6 +148,12 @@ router.put(
 // PUT
 // /api/appointments/payment/:id
 // ============================================================
+
+router.post(
+  "/payment/collect-at-hospital/:id",
+  authMiddleware,
+  collectHospitalVisitPayment
+);
 
 router.put(
   "/payment/:id",

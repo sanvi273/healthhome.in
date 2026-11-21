@@ -6,8 +6,15 @@ const Payment = require("../models/Payment");
 const Order = require("../models/orderModel");
 const Appointment = require("../models/Appointment");
 const User = require("../models/user");
+const Doctor = require("../models/doctor");
 const uploadToCloudinary = require("../utils/cloudinaryUpload");
 const { uploadPatientReport } = require("../utils/patientReportStorage");
+const {
+  normalizeConsultationType,
+  parseAppointmentTime,
+  formatAppointmentTime,
+  validateDoctorSlot,
+} = require("../utils/doctorSchedule");
 
 const appointmentWithoutReports = (appointment) => {
   const data =
@@ -71,57 +78,6 @@ const normalizeServiceType = (type) => {
   if (s === "lab" || s === "laboratory") return "Lab";
   if (s === "medicine" || s === "pharmacy") return "Medicine";
   return safeString(type);
-};
-
-// Helper: Expire stale pending doctor appointments (> 15 minutes old)
-// to automatically release blocked slots when users abandon checkout.
-const expireStalePendingAppointments = async (doctorId, date, time) => {
-  try {
-    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-    const filter = {
-      doctorId: String(doctorId),
-      appointmentDate: String(date),
-      appointmentTime: String(time),
-      status: "Pending",
-      paymentStatus: "Pending",
-      createdAt: { $lt: fifteenMinutesAgo },
-    };
-
-    const staleAppointments = await Appointment.find(filter);
-    if (staleAppointments.length > 0) {
-      await Appointment.updateMany(filter, {
-        $set: {
-          status: "Cancelled",
-          paymentStatus: "Failed",
-        },
-      });
-
-      for (const stale of staleAppointments) {
-        await Payment.updateMany(
-          {
-            $or: [
-              { appointmentId: String(stale._id) },
-              { orderReferenceId: String(stale._id) },
-              { razorpayOrderId: stale.razorpayOrderId },
-            ],
-            status: "Pending",
-          },
-          {
-            $set: {
-              status: "Cancelled",
-              paymentStatus: "CANCELLED",
-              failureReason: "Payment reservation expired.",
-            },
-          }
-        );
-      }
-      console.log(
-        `[Payment] Auto-expired ${staleAppointments.length} abandoned appointment(s) for doctor ${doctorId} at ${date} ${time}`
-      );
-    }
-  } catch (err) {
-    console.error("[Payment] Error expiring stale appointments:", err.message);
-  }
 };
 
 // Helper: Normalize payment method from Razorpay entity
@@ -775,27 +731,12 @@ exports.verifyPayment = async (req, res) => {
 
 exports.createDoctorOrder = async (req, res) => {
   try {
-    const config = checkRazorpayConfiguration();
-    if (!config.success) {
-      return res.status(500).json(config);
-    }
-
     const authenticatedUser = await User.findById(req.user.id);
     if (!authenticatedUser) {
-      return res.status(401).json({
-        success: false,
-        message: "Authenticated user not found.",
-      });
+      return res.status(401).json({ success: false, message: "Authenticated user not found." });
     }
-
-    if (
-      authenticatedUser.role !== "patient" ||
-      authenticatedUser.accountStatus !== "ACTIVE"
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "Only active patients can book doctor appointments.",
-      });
+    if (authenticatedUser.role !== "patient" || authenticatedUser.accountStatus !== "ACTIVE") {
+      return res.status(403).json({ success: false, message: "Only active patients can book doctor appointments." });
     }
 
     const {
@@ -807,7 +748,6 @@ exports.createDoctorOrder = async (req, res) => {
       appointmentDate,
       appointmentTime,
     } = req.body;
-
     const patientName = safeString(authenticatedUser.name);
     const patientPhone = safeString(authenticatedUser.phone);
 
@@ -817,93 +757,100 @@ exports.createDoctorOrder = async (req, res) => {
         message: "doctorId, appointmentDate and appointmentTime are required.",
       });
     }
-
     if (!isValidObjectId(doctorId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid doctor ID.",
-      });
+      return res.status(400).json({ success: false, message: "Invalid doctor ID." });
     }
 
-    // Auto-expire any stale pending appointments (>15 mins old) for this slot
-    await expireStalePendingAppointments(
-      doctorId,
-      appointmentDate,
-      appointmentTime
-    );
+    const normalizedConsultationType = normalizeConsultationType(consultationType);
+    if (normalizedConsultationType === "Video Consultation") {
+      const config = checkRazorpayConfiguration();
+      if (!config.success) return res.status(500).json(config);
+    }
 
-    // Get doctor fee from MongoDB
-    const doctor = await mongoose.connection
-      .collection("doctors")
-      .findOne({ _id: new mongoose.Types.ObjectId(doctorId) });
-
+    const doctor = await Doctor.findById(doctorId);
     if (!doctor) {
-      return res.status(404).json({
-        success: false,
-        message: "Doctor not found.",
-      });
+      return res.status(404).json({ success: false, message: "Doctor not found." });
     }
 
     const amount = Number(doctor.fees);
     if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid doctor consultation fee in database.",
-      });
+      return res.status(400).json({ success: false, message: "Invalid doctor consultation fee in database." });
     }
 
-    const normalizedConsultationType =
-      safeString(consultationType).toLowerCase() === "hospital visit"
-        ? "Hospital Visit"
-        : "Video Consultation";
-
-    // Check for active slot collision
-    const activeSlot = await Appointment.findOne({
-      doctorId: String(doctorId),
-      appointmentDate: String(appointmentDate),
-      appointmentTime: String(appointmentTime),
-      status: { $in: ["Pending", "Upcoming", "Accepted"] },
-    }).lean();
-
-    if (activeSlot) {
-      return res.status(409).json({
-        success: false,
-        message: "This appointment slot is already booked.",
-      });
+    const requestedMinutes = parseAppointmentTime(String(appointmentTime));
+    if (requestedMinutes === null) {
+      return res.status(400).json({ success: false, message: "Invalid appointment time." });
+    }
+    const normalizedAppointmentTime = formatAppointmentTime(requestedMinutes);
+    const slotError = await validateDoctorSlot({
+      doctor,
+      date: String(appointmentDate).trim(),
+      time: normalizedAppointmentTime,
+      consultationType: normalizedConsultationType,
+    });
+    if (slotError) {
+      return res.status(409).json({ success: false, message: slotError });
     }
 
-    // Multer keeps uploaded files in memory. Store bytes as authenticated
-    // Cloudinary assets and keep only the storage reference in MongoDB.
+    // Patient reports are uploaded for both consultation types and remain
+    // attached to the appointment as before.
     const reports = [];
     if (req.files && Array.isArray(req.files)) {
-      for (const file of req.files) {
-        reports.push(await uploadPatientReport(file));
-      }
+      for (const file of req.files) reports.push(await uploadPatientReport(file));
     }
 
-    // Create pending appointment
+    const paymentMethod = normalizedConsultationType === "Hospital Visit"
+      ? "AT_HOSPITAL"
+      : "ONLINE";
     const appointment = await Appointment.create({
       patientId: authenticatedUser._id,
       patientName,
       patientPhone,
       doctorId: String(doctorId),
       doctorName: String(doctor.name || doctorName || "Doctor").trim(),
-      specialization: String(
-        doctor.specialization || specialization || ""
-      ).trim(),
+      specialization: String(doctor.specialization || specialization || "").trim(),
       hospital: String(doctor.hospital || hospital || "").trim(),
       consultationType: normalizedConsultationType,
       appointmentDate: String(appointmentDate).trim(),
-      appointmentTime: String(appointmentTime).trim(),
+      appointmentTime: normalizedAppointmentTime,
       fees: amount,
       reports,
       status: "Pending",
       paymentStatus: "Pending",
+      paymentMethod,
     });
 
-    const amountInPaise = Math.round(amount * 100);
+    if (normalizedConsultationType === "Hospital Visit") {
+      await Payment.create({
+        orderReferenceId: String(appointment._id),
+        appointmentId: String(appointment._id),
+        userId: String(authenticatedUser._id),
+        userName: patientName,
+        userPhone: patientPhone,
+        serviceType: "Doctor",
+        serviceId: String(appointment._id),
+        amount,
+        currency: "INR",
+        paymentMethod: "AT_HOSPITAL",
+        status: "Pending",
+        paymentStatus: "PENDING",
+        verificationStatus: "SKIPPED",
+        providerId: String(doctorId),
+        providerType: "Doctor",
+        transactionDate: new Date(),
+      });
 
-    // Create Razorpay order
+      return res.status(200).json({
+        success: true,
+        paymentRequired: false,
+        paymentMethod,
+        message: "Appointment request booked. Payment is due at the hospital visit.",
+        appointmentId: String(appointment._id),
+        appointment: appointmentWithoutReports(appointment),
+      });
+    }
+
+    const amountInPaise = Math.round(amount * 100);
     const razorpayOrder = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
@@ -917,11 +864,9 @@ exports.createDoctorOrder = async (req, res) => {
       },
     });
 
-    // Update appointment with Razorpay Order ID
     appointment.razorpayOrderId = razorpayOrder.id;
     await appointment.save();
 
-    // Create Payment record
     await Payment.create({
       orderReferenceId: String(appointment._id),
       appointmentId: String(appointment._id),
@@ -945,6 +890,7 @@ exports.createDoctorOrder = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      paymentRequired: true,
       order: razorpayOrder,
       razorpayOrderId: razorpayOrder.id,
       key: razorpayKeyId,
@@ -961,8 +907,6 @@ exports.createDoctorOrder = async (req, res) => {
     });
   }
 };
-
-// ============================================================
 // 4. VERIFY DOCTOR APPOINTMENT PAYMENT
 // ============================================================
 
@@ -1009,6 +953,17 @@ exports.verifyDoctorPayment = async (req, res) => {
         success: false,
         paymentVerified: false,
         message: "Appointment not found.",
+      });
+    }
+
+    if (
+      appointment.consultationType !== "Video Consultation" ||
+      appointment.paymentMethod !== "ONLINE"
+    ) {
+      return res.status(400).json({
+        success: false,
+        paymentVerified: false,
+        message: "Online payment is only accepted for video consultations.",
       });
     }
 

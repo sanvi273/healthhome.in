@@ -1,5 +1,21 @@
 const mongoose = require("mongoose");
 
+const consultationScheduleSchema = new mongoose.Schema(
+  {
+    workingDays: {
+      type: [String],
+      default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+    },
+    startTime: { type: String, default: "10:00" },
+    endTime: { type: String, default: "19:30" },
+    breakStart: { type: String, default: "13:00" },
+    breakEnd: { type: String, default: "14:00" },
+    slotDurationMinutes: { type: Number, default: 30, min: 10, max: 120 },
+    maxAppointmentsPerDay: { type: Number, default: 10, min: 1, max: 100 },
+  },
+  { _id: false },
+);
+
 const doctorSchema = new mongoose.Schema(
   {
     // Optional for legacy records. New records are linked to the authenticated User.
@@ -127,6 +143,26 @@ const doctorSchema = new mongoose.Schema(
       default: 10,
       min: 1,
       max: 100,
+    },
+
+    // Separate appointment slots for in-person and video consultations.
+    // Left optional so existing doctor profiles continue using their legacy
+    // shared schedule until the doctor saves the new schedule settings.
+    consultationSchedules: {
+      type: new mongoose.Schema(
+        {
+          hospitalVisit: {
+            type: consultationScheduleSchema,
+            default: undefined,
+          },
+          videoConsultation: {
+            type: consultationScheduleSchema,
+            default: undefined,
+          },
+        },
+        { _id: false },
+      ),
+      default: undefined,
     },
   },
   {

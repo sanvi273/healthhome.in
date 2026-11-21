@@ -363,6 +363,7 @@ const updateDoctorSchedule = async (req, res) => {
     }
 
     const {
+      consultationSchedules,
       workingDays,
       startTime,
       endTime,
@@ -373,6 +374,68 @@ const updateDoctorSchedule = async (req, res) => {
     } = req.body;
 
     const updates = {};
+
+    if (consultationSchedules !== undefined) {
+      const normalizeSchedule = (schedule, label) => {
+        if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) {
+          throw new Error(`${label} schedule is required`);
+        }
+        const days = schedule.workingDays;
+        if (
+          !Array.isArray(days) ||
+          days.length === 0 ||
+          days.some((day) => !WEEKDAYS.includes(day)) ||
+          new Set(days).size !== days.length
+        ) {
+          throw new Error(`${label} workingDays must contain unique valid weekdays`);
+        }
+
+        const start = schedule.startTime;
+        const end = schedule.endTime;
+        const breakStart = schedule.breakStart || "";
+        const breakEnd = schedule.breakEnd || "";
+        if (!isValidTime(start) || !isValidTime(end) || start >= end) {
+          throw new Error(`${label} startTime and endTime must be valid, with start before end`);
+        }
+        if (Boolean(breakStart) !== Boolean(breakEnd)) {
+          throw new Error(`${label} break start and end must both be provided or both be empty`);
+        }
+        if (breakStart && (
+          !isValidTime(breakStart) || !isValidTime(breakEnd) ||
+          breakStart >= breakEnd || breakStart < start || breakEnd > end
+        )) {
+          throw new Error(`${label} break must fall within working hours`);
+        }
+
+        const duration = Number(schedule.slotDurationMinutes);
+        const maxAppointments = Number(schedule.maxAppointmentsPerDay);
+        if (!Number.isInteger(duration) || duration < 10 || duration > 120) {
+          throw new Error(`${label} slot duration must be from 10 to 120 minutes`);
+        }
+        if (!Number.isInteger(maxAppointments) || maxAppointments < 1 || maxAppointments > 100) {
+          throw new Error(`${label} daily appointment limit must be from 1 to 100`);
+        }
+
+        return {
+          workingDays: days,
+          startTime: start,
+          endTime: end,
+          breakStart,
+          breakEnd,
+          slotDurationMinutes: duration,
+          maxAppointmentsPerDay: maxAppointments,
+        };
+      };
+
+      try {
+        updates.consultationSchedules = {
+          hospitalVisit: normalizeSchedule(consultationSchedules.hospitalVisit, "Hospital visit"),
+          videoConsultation: normalizeSchedule(consultationSchedules.videoConsultation, "Video consultation"),
+        };
+      } catch (error) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
+    }
 
     if (workingDays !== undefined) {
       if (
@@ -461,6 +524,16 @@ const updateDoctorSchedule = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Doctor profile not found for this account",
+      });
+    }
+
+    if (updates.consultationSchedules) {
+      doctor.consultationSchedules = updates.consultationSchedules;
+      await doctor.save();
+      return res.status(200).json({
+        success: true,
+        message: "Doctor consultation schedules updated successfully",
+        doctor,
       });
     }
 

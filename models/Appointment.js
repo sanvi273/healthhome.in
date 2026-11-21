@@ -274,6 +274,13 @@ const appointmentSchema = new mongoose.Schema(
       default: "Pending",
     },
 
+    paymentMethod: {
+      type: String,
+      enum: ["ONLINE", "AT_HOSPITAL", ""],
+      default: "ONLINE",
+      trim: true,
+    },
+
     razorpayOrderId: {
       type: String,
       default: "",

@@ -1,6 +1,7 @@
 const Appointment = require("../models/Appointment");
 const VideoCallSession = require("../models/VideoCallSession");
 const User = require("../models/user");
+const Payment = require("../models/Payment");
 
 const {
 
@@ -15,6 +16,15 @@ const {
   getPatientReportBytes,
   isAllowedLegacyCloudinaryUrl,
 } = require("../utils/patientReportStorage");
+const {
+  normalizeConsultationType,
+  parseAppointmentTime,
+  formatAppointmentTime,
+  parseCalendarDate,
+  getDoctorSlotConfig,
+  expireStaleVideoReservations,
+  validateDoctorSlot,
+} = require("../utils/doctorSchedule");
 
 // Shared helpers for consistent appointment slot validation.
 const Doctor = require("../models/doctor");
@@ -66,116 +76,6 @@ const appointmentForDoctorSchedule = (appointment) => {
   });
   return data;
 };
-
-const parseAppointmentTime = (value) => {
-  if (typeof value !== "string") return null;
-  const input = value.trim();
-  let match = /^(\d{1,2}):(\d{2})$/.exec(input);
-  if (match) {
-    const h = Number(match[1]), m = Number(match[2]);
-    return h <= 23 && m <= 59 ? h * 60 + m : null;
-  }
-  match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(input);
-  if (!match) return null;
-  let h = Number(match[1]), m = Number(match[2]);
-  if (h < 1 || h > 12 || m > 59) return null;
-  h = h % 12 + (/PM/i.test(match[3]) ? 12 : 0);
-  return h * 60 + m;
-};
-
-const formatAppointmentTime = (minutes) => {
-  const h24 = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  const period = h24 >= 12 ? "PM" : "AM";
-  const h12 = h24 % 12 || 12;
-  return `${String(h12).padStart(2, "0")}:${String(mins).padStart(2, "0")} ${period}`;
-};
-
-const parseCalendarDate = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
-  if (!match) return null;
-  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day ? date : null;
-};
-
-const getDoctorSlotConfig = (doctor) => {
-  const start = parseAppointmentTime(doctor.startTime);
-  const end = parseAppointmentTime(doctor.endTime);
-  const breakStart = parseAppointmentTime(doctor.breakStart);
-  const breakEnd = parseAppointmentTime(doctor.breakEnd);
-  const duration = Number(doctor.slotDurationMinutes);
-  const workingDays = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
-  if (start === null || end === null || start >= end ||
-      breakStart === null || breakEnd === null ||
-      breakStart > breakEnd || !Number.isFinite(duration) ||
-      duration <= 0 || workingDays.length === 0) return null;
-  return { start, end, breakStart, breakEnd, duration, workingDays };
-};
-
-const validateDoctorSlot = async ({ doctor, date, time, excludeAppointmentId }) => {
-  if (!doctor || doctor.isAvailable === false) return "Doctor is not accepting appointments.";
-  const parsedDate = parseCalendarDate(date);
-  if (!parsedDate) return "Date must be valid and use YYYY-MM-DD format.";
-  const today = new Date();
-  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-  if (parsedDate < todayUtc) return "Past appointment dates are not allowed.";
-
-  const config = getDoctorSlotConfig(doctor);
-  if (!config) return "Doctor's schedule is incomplete or invalid.";
-  const dayIndex = parsedDate.getUTCDay();
-  const dayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][dayIndex];
-  if (!config.workingDays.some((day) => String(day).trim().toLowerCase() === dayName.toLowerCase())) {
-    return "Doctor is not available on the selected day.";
-  }
-
-  const requestedMinutes = parseAppointmentTime(time);
-  if (requestedMinutes === null) return "Invalid appointment time.";
-  const slotStart = config.start + Math.floor((requestedMinutes - config.start) / config.duration) * config.duration;
-  if (requestedMinutes < config.start || requestedMinutes >= config.end ||
-      (requestedMinutes - config.start) % config.duration !== 0 ||
-      requestedMinutes + config.duration > config.end) {
-    return "Selected time is not a valid appointment slot.";
-  }
-  if (requestedMinutes < config.breakEnd && requestedMinutes + config.duration > config.breakStart) {
-    return "Selected time overlaps the doctor's break.";
-  }
-
-  // Auto-expire stale pending appointments (>15 min) where checkout was abandoned
-  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-  await Appointment.updateMany(
-    {
-      doctorId: String(doctor._id),
-      appointmentDate: date,
-      status: "Pending",
-      paymentStatus: "Pending",
-      createdAt: { $lt: fifteenMinutesAgo },
-    },
-    {
-      $set: { status: "Cancelled", paymentStatus: "Failed" },
-    }
-  );
-
-  const dayAppointments = await Appointment.find({
-    doctorId: String(doctor._id),
-    appointmentDate: date,
-    status: { $in: ["Pending", "Upcoming", "Accepted"] },
-    ...(excludeAppointmentId ? { _id: { $ne: excludeAppointmentId } } : {}),
-  }).select("appointmentTime");
-
-  if (dayAppointments.length >= Number(doctor.maxAppointmentsPerDay || 10)) {
-    return "Doctor's daily appointment limit has been reached.";
-  }
-
-  const occupied = dayAppointments.some((item) =>
-    parseAppointmentTime(item.appointmentTime) === requestedMinutes
-  );
-  if (occupied) return "This appointment slot is already booked.";
-  return null;
-};
-
 
 // ============================================================
 
@@ -265,15 +165,14 @@ exports.bookAppointment =
 
       // ========================================================
 
-      const finalConsultationType =
+      const finalConsultationType = normalizeConsultationType(consultationType);
 
-        consultationType ===
-
-        "Video Consultation"
-
-          ? "Video Consultation"
-
-          : "Hospital Visit";
+      if (finalConsultationType === "Video Consultation") {
+        return res.status(400).json({
+          success: false,
+          message: "Video consultations must be booked through the online payment flow.",
+        });
+      }
 
       // ========================================================
 
@@ -301,6 +200,7 @@ exports.bookAppointment =
         doctor: doctorForBooking,
         date: appointmentDate,
         time: normalizedAppointmentTime,
+        consultationType: finalConsultationType,
       });
       if (slotError) {
         return res.status(400).json({ success: false, message: slotError });
@@ -438,7 +338,9 @@ exports.bookAppointment =
 
           paymentStatus:
 
-            paymentStatus || "Pending",
+            "Pending",
+
+          paymentMethod: "AT_HOSPITAL",
 
           razorpayOrderId:
 
@@ -645,367 +547,115 @@ exports.bookAppointment =
 // ============================================================
 
 exports.getAvailableSlots = async (req, res) => {
-
   try {
-
-    const doctorId = req.params.doctorId?.toString().trim();
-
-    const appointmentDate = req.params.date?.toString().trim();
-
+    const doctorId = String(req.params.doctorId || "").trim();
+    const appointmentDate = String(req.params.date || "").trim();
+    const consultationType = normalizeConsultationType(req.query.consultationType);
     if (!doctorId || !appointmentDate) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message: "Doctor ID and appointment date are required",
-
-      });
-
+      return res.status(400).json({ success: false, message: "Doctor ID and appointment date are required" });
     }
-
-    const Doctor = require("../models/doctor");
 
     const doctor = await Doctor.findById(doctorId);
-
     if (!doctor) {
-
-      return res.status(404).json({
-
-        success: false,
-
-        message: "Doctor not found",
-
-      });
-
+      return res.status(404).json({ success: false, message: "Doctor not found" });
     }
 
-    // Doctor model stores these fields directly (not under doctor.schedule).
-    const workingDays = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
-    const startTime = doctor.startTime;
-    const endTime = doctor.endTime;
-    const breakStart = doctor.breakStart;
-    const breakEnd = doctor.breakEnd;
-    const slotDuration = Number(doctor.slotDurationMinutes);
-    const dailyLimit = Number(doctor.maxAppointmentsPerDay);
-
-    if (slotDuration <= 0 || !Number.isFinite(slotDuration)) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message: "Invalid slot duration in doctor's schedule",
-
-      });
-
+    const config = getDoctorSlotConfig(doctor, consultationType);
+    if (!config) {
+      return res.status(400).json({ success: false, message: "Invalid doctor's schedule for this consultation type" });
+    }
+    const requestedDate = parseCalendarDate(appointmentDate);
+    if (!requestedDate) {
+      return res.status(400).json({ success: false, message: "Date must be valid and use YYYY-MM-DD format" });
     }
 
-    // Parse HH:mm into minutes after midnight.
-
-    const toMinutes = (time) => {
-
-      if (!time || !/^\d{1,2}:\d{2}$/.test(time)) {
-
-        return null;
-
-      }
-
-      const [hours, minutes] = time.split(":").map(Number);
-
-      if (
-
-        hours < 0 ||
-
-        hours > 23 ||
-
-        minutes < 0 ||
-
-        minutes > 59
-
-      ) {
-
-        return null;
-
-      }
-
-      return hours * 60 + minutes;
-
-    };
-
-    const start = toMinutes(startTime);
-
-    const end = toMinutes(endTime);
-
-    const breakFrom = toMinutes(breakStart);
-
-    const breakTo = toMinutes(breakEnd);
-
-    if (
-
-      start === null ||
-
-      end === null ||
-
-      start >= end ||
-
-      breakFrom === null ||
-
-      breakTo === null
-
-    ) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message: "Invalid doctor's working schedule",
-
-      });
-
+    const today = new Date();
+    const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+    if (requestedDate < todayUtc) {
+      return res.status(200).json({ success: true, doctorId, date: appointmentDate, consultationType, slots: [] });
     }
 
-    // Parse date as a calendar date, avoiding loose date matching.
-
-    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
-
-      appointmentDate
-
-    );
-
-    if (!dateMatch) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message: "Date must use YYYY-MM-DD format",
-
-      });
-
-    }
-
-    const year = Number(dateMatch[1]);
-
-    const month = Number(dateMatch[2]);
-
-    const day = Number(dateMatch[3]);
-
-    const requestedDate = new Date(Date.UTC(year, month - 1, day));
-
-    if (
-
-      requestedDate.getUTCFullYear() !== year ||
-
-      requestedDate.getUTCMonth() !== month - 1 ||
-
-      requestedDate.getUTCDate() !== day
-
-    ) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        message: "Invalid appointment date",
-
-      });
-
-    }
-
-    // Monday = 1 ... Sunday = 7.
-
-    const weekday = requestedDate.getUTCDay();
-
-    const dayNumber = weekday === 0 ? 7 : weekday;
-
-    const dayNames = [
-
-      "",
-
-      "Monday",
-
-      "Tuesday",
-
-      "Wednesday",
-
-      "Thursday",
-
-      "Friday",
-
-      "Saturday",
-
-      "Sunday",
-
-    ];
-
-    const requestedDay = dayNames[dayNumber];
-
-    const normalizeDay = (value) =>
-
-      String(value).trim().toLowerCase();
-
-    const isWorkingDay =
-
-      workingDays.length === 0 ||
-
-      workingDays.some(
-
-        (day) => normalizeDay(day) === normalizeDay(requestedDay)
-
-      );
-
+    const dayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][requestedDate.getUTCDay()];
+    const isWorkingDay = config.workingDays.some((day) => String(day).trim().toLowerCase() === dayName.toLowerCase());
     if (!isWorkingDay || doctor.isAvailable === false) {
-
       return res.status(200).json({
-
         success: true,
-
         doctorId,
-
         date: appointmentDate,
-
+        consultationType,
         slots: [],
-
         message: "Doctor is unavailable on this date",
-
       });
-
     }
 
-    // Auto-expire stale pending appointments (>15 min) where checkout was abandoned
-    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-    await Appointment.updateMany(
-      {
-        doctorId: String(doctorId),
-        appointmentDate,
-        status: "Pending",
-        paymentStatus: "Pending",
-        createdAt: { $lt: fifteenMinutesAgo },
-      },
-      {
-        $set: { status: "Cancelled", paymentStatus: "Failed" },
-      }
-    );
+    await expireStaleVideoReservations(doctorId, appointmentDate);
 
-    // Find appointments that occupy slots.
     const bookedAppointments = await Appointment.find({
       doctorId,
       appointmentDate,
-      status: {
-        $in: ["Pending", "Upcoming", "Accepted"],
-      },
-    }).select("appointmentTime");
+      status: { $in: ["Pending", "Upcoming", "Accepted"] },
+    }).select("appointmentTime consultationType");
 
-    if (bookedAppointments.length >= dailyLimit) {
-
+    const appointmentsForType = bookedAppointments.filter((appointment) =>
+      normalizeConsultationType(appointment.consultationType) === consultationType
+    );
+    const scheduleKey = consultationType === "Video Consultation" ? "videoConsultation" : "hospitalVisit";
+    const dailyLimit = Number(
+      doctor.consultationSchedules?.[scheduleKey]?.maxAppointmentsPerDay ||
+      doctor.maxAppointmentsPerDay ||
+      10
+    );
+    if (appointmentsForType.length >= dailyLimit) {
       return res.status(200).json({
-
         success: true,
-
         doctorId,
-
         date: appointmentDate,
-
+        consultationType,
         slots: [],
-
         message: "Doctor's daily appointment limit has been reached",
-
       });
-
     }
 
-    const bookedSlots = new Set(
-      bookedAppointments
-        .map((appointment) => parseAppointmentTime(appointment.appointmentTime))
-        .filter((minutes) => minutes !== null)
-    );
-
-    const formatTime = (minutes) => {
-
-      const hours24 = Math.floor(minutes / 60);
-
-      const mins = minutes % 60;
-
-      const period = hours24 >= 12 ? "PM" : "AM";
-
-      const hours12 = hours24 % 12 || 12;
-
-      return `${String(hours12).padStart(2, "0")}:${String(
-
-        mins
-
-      ).padStart(2, "0")} ${period}`;
-
-    };
+    const bookedRanges = bookedAppointments
+      .map((appointment) => {
+        const bookedStart = parseAppointmentTime(appointment.appointmentTime);
+        const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType);
+        const bookedDuration = bookedConfig?.duration || config.duration;
+        return bookedStart === null ? null : [bookedStart, bookedStart + bookedDuration];
+      })
+      .filter(Boolean);
 
     const slots = [];
-
-    for (
-
-      let time = start;
-
-      time + slotDuration <= end;
-
-      time += slotDuration
-
-    ) {
-
-      const slotEnd = time + slotDuration;
-
-      // Exclude slots that overlap the doctor's break.
-
-      const overlapsBreak =
-
-        time < breakTo && slotEnd > breakFrom;
-
-      if (overlapsBreak) {
-
-        continue;
-
-      }
-
-      const formattedTime = formatTime(time);
+    for (let time = config.start; time + config.duration <= config.end; time += config.duration) {
+      const slotEnd = time + config.duration;
+      const overlapsBreak = config.breakStart !== null && config.breakEnd !== null &&
+        time < config.breakEnd && slotEnd > config.breakStart;
+      if (overlapsBreak) continue;
 
       slots.push({
-        time: formattedTime,
-        available: !bookedSlots.has(time),
+        time: formatAppointmentTime(time),
+        available: !bookedRanges.some(([bookedStart, bookedEnd]) =>
+          bookedStart < slotEnd && bookedEnd > time
+        ),
       });
-
     }
 
     return res.status(200).json({
-
       success: true,
-
       doctorId,
-
       date: appointmentDate,
-
+      consultationType,
       slots,
-
     });
-
   } catch (error) {
-
     console.error("GET AVAILABLE SLOTS ERROR:", error);
-
     return res.status(500).json({
-
       success: false,
-
       message: "Failed to load available slots",
-
       error: error.message,
-
     });
-
   }
-
 };
-
-// ============================================================
-
 // GET ALL APPOINTMENTS
 
 // ============================================================
@@ -1692,6 +1342,17 @@ exports.updateAppointmentStatus =
         });
       }
 
+      if (
+        existingAppointment.consultationType === "Video Consultation" &&
+        ["Accepted", "Upcoming", "Completed"].includes(status) &&
+        existingAppointment.paymentStatus !== "Paid"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "Video consultation payment must be completed before confirming the appointment.",
+        });
+      }
+
       const appointment =
 
         await Appointment.findByIdAndUpdate(
@@ -2052,6 +1713,13 @@ exports.startConsultation =
 
       // ========================================================
 
+      if (appointment.paymentStatus !== "Paid") {
+        return res.status(403).json({
+          success: false,
+          message: "Complete online payment before starting the video consultation.",
+        });
+      }
+
       // CREATE / REUSE MEETING ID
 
       // ========================================================
@@ -2129,6 +1797,20 @@ exports.joinConsultation =
   async (req, res) => {
 
     try {
+
+      const existingAppointment = await Appointment.findById(req.params.id);
+      if (!existingAppointment) {
+        return res.status(404).json({ success: false, message: "Appointment not found" });
+      }
+      if (existingAppointment.consultationType !== "Video Consultation") {
+        return res.status(400).json({ success: false, message: "This appointment is not a video consultation" });
+      }
+      if (existingAppointment.paymentStatus !== "Paid") {
+        return res.status(403).json({
+          success: false,
+          message: "Complete online payment before joining the video consultation",
+        });
+      }
 
       const appointment =
 
@@ -2227,6 +1909,8 @@ exports.checkReadyConsultation =
           consultationType:
 
             "Video Consultation",
+
+          paymentStatus: "Paid",
 
           status: {
 
@@ -2552,6 +2236,13 @@ exports.generateAgoraToken =
       }
 
       // ========================================================
+
+      if (appointment.paymentStatus !== "Paid") {
+        return res.status(403).json({
+          success: false,
+          message: "Complete online payment before joining the video consultation.",
+        });
+      }
 
       // CONSULTATION MUST BE READY OR JOINED
 
@@ -2931,6 +2622,7 @@ exports.proposeReschedule = async (req, res) => {
       doctor: doctorForReschedule,
       date: proposedAppointmentDate,
       time: proposedTimeNormalized,
+      consultationType: appointment.consultationType,
       excludeAppointmentId: appointment._id,
     });
     if (proposedSlotError) {
@@ -3266,6 +2958,7 @@ exports.respondToReschedule = async (req, res) => {
       doctor: doctorForAcceptance,
       date: proposedDate,
       time: proposedTime,
+      consultationType: appointment.consultationType,
       excludeAppointmentId: appointment._id,
     });
     if (acceptanceSlotError) {
@@ -3381,4 +3074,90 @@ exports.respondToReschedule = async (req, res) => {
 
   }
 
+};
+
+exports.collectHospitalVisitPayment = async (req, res) => {
+  try {
+    const authenticatedUser = await User.findById(req.user?.id);
+    if (
+      !authenticatedUser ||
+      authenticatedUser.role !== "doctor" ||
+      authenticatedUser.verificationStatus !== "APPROVED"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "An approved doctor account is required",
+      });
+    }
+
+    const appointment = await Appointment.findById(req.params.id);
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: "Appointment not found" });
+    }
+    if (
+      appointment.consultationType !== "Hospital Visit" ||
+      appointment.paymentMethod !== "AT_HOSPITAL"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Only hospital visit payments can be recorded here",
+      });
+    }
+    if (!["Accepted", "Upcoming", "Completed"].includes(appointment.status)) {
+      return res.status(409).json({
+        success: false,
+        message: "Accept the appointment before recording payment at the visit",
+      });
+    }
+
+    const doctor = await Doctor.findOne({
+      _id: appointment.doctorId,
+      $or: [
+        { userId: authenticatedUser._id },
+        { userId: null, phone: authenticatedUser.phone },
+        { userId: { $exists: false }, phone: authenticatedUser.phone },
+      ],
+    });
+    if (!doctor) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to record this payment",
+      });
+    }
+
+    if (appointment.paymentStatus === "Paid") {
+      return res.status(200).json({
+        success: true,
+        message: "Hospital visit payment is already recorded",
+        appointment: appointmentWithoutReports(appointment),
+      });
+    }
+
+    appointment.paymentStatus = "Paid";
+    appointment.paymentMethod = "AT_HOSPITAL";
+    await appointment.save();
+
+    const payment = await Payment.findOne({ appointmentId: String(appointment._id) });
+    if (payment) {
+      payment.status = "Collected";
+      payment.paymentStatus = "SUCCESS";
+      payment.verificationStatus = "SKIPPED";
+      payment.paymentMethod = "AT_HOSPITAL";
+      payment.transactionDate = new Date();
+      await payment.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Hospital visit payment recorded",
+      appointment: appointmentWithoutReports(appointment),
+    });
+  } catch (error) {
+    console.error("COLLECT HOSPITAL VISIT PAYMENT ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to record hospital visit payment",
+      error: error.message,
+    });
+  }
 };
