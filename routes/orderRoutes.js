@@ -12,6 +12,9 @@ const {
 
   getPharmacyOrders,
   getPatientOrders,
+  requestMedicineReturn,
+  decideMedicineReturn,
+  markMedicineReturnReceived,
 
   updateOrderStatus,
 
@@ -95,6 +98,26 @@ router.get(
 router.get(
   "/patient/:phone",
   getPatientOrders
+);
+
+router.post(
+  "/return-request/:id",
+  authMiddleware,
+  requestMedicineReturn
+);
+
+router.put(
+  "/return-request/:id/decision",
+  authMiddleware,
+  approvedPharmacy,
+  decideMedicineReturn
+);
+
+router.put(
+  "/return-request/:id/received",
+  authMiddleware,
+  approvedPharmacy,
+  markMedicineReturnReceived
 );
 
 // ============================================================

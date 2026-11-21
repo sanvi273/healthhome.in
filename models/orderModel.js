@@ -237,6 +237,60 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    deliveredAt: {
+      type: Date,
+      default: null,
+    },
+
+    returnRequestStatus: {
+      type: String,
+      enum: [
+        "NOT_REQUESTED",
+        "REQUESTED",
+        "APPROVED",
+        "REJECTED",
+        "RECEIVED",
+      ],
+      default: "NOT_REQUESTED",
+      index: true,
+    },
+
+    returnReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 1000,
+    },
+
+    returnRequestedAt: {
+      type: Date,
+      default: null,
+    },
+
+    returnDecisionAt: {
+      type: Date,
+      default: null,
+    },
+
+    returnDecisionNote: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 1000,
+    },
+
+    returnReceivedAt: {
+      type: Date,
+      default: null,
+    },
+
+    returnReceivedNote: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 1000,
+    },
+
     // ========================================================
     // DELIVERY AGENT DETAILS
     // ========================================================

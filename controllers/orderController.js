@@ -11,6 +11,205 @@ const normalizePhone = (value) =>
   String(value || "").replace(/\D/g, "").slice(-10);
 const normalizeMedicineName = (value) =>
   String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+const RETURN_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+const findOrderOwnedByPharmacyUser = async (order, user) => {
+  if (!order || !user || user.role !== "pharmacy") return false;
+  const pharmacy = await Pharmacy.findOne({
+    _id: order.pharmacyId,
+    $or: [{ userId: user._id }, { phone: user.phone }],
+  }).select("_id");
+  return Boolean(pharmacy);
+};
+
+const requestMedicineReturn = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?.id).select("role phone");
+    if (!user || user.role !== "patient") {
+      return res.status(403).json({
+        success: false,
+        message: "Patient account required.",
+      });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found." });
+    }
+    if (
+      !normalizePhone(user.phone) ||
+      normalizePhone(order.patientPhone) !== normalizePhone(user.phone)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only request a return for your own order.",
+      });
+    }
+    if (order.status !== "Delivered") {
+      return res.status(400).json({
+        success: false,
+        message: "A return can only be requested after delivery is complete.",
+      });
+    }
+    if (!Array.isArray(order.medicines) || order.medicines.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "This order does not contain medicines eligible for return.",
+      });
+    }
+
+    const deliveredAt = order.deliveredAt || order.updatedAt || order.createdAt;
+    const deliveredAtMs = deliveredAt ? new Date(deliveredAt).getTime() : NaN;
+    if (
+      !Number.isFinite(deliveredAtMs) ||
+      Date.now() >= deliveredAtMs + RETURN_WINDOW_MS
+    ) {
+      return res.status(410).json({
+        success: false,
+        message: "The 3-day return window for this order has expired.",
+      });
+    }
+
+    if ((order.returnRequestStatus || "NOT_REQUESTED") !== "NOT_REQUESTED") {
+      return res.status(409).json({
+        success: false,
+        message: "A return request has already been submitted for this order.",
+        returnRequestStatus: order.returnRequestStatus,
+      });
+    }
+
+    const reason = String(req.body?.reason || "").trim();
+    if (reason.length < 5 || reason.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a return reason between 5 and 1000 characters.",
+      });
+    }
+
+    order.returnRequestStatus = "REQUESTED";
+    order.returnReason = reason;
+    order.returnRequestedAt = new Date();
+    order.returnDecisionAt = null;
+    order.returnDecisionNote = "";
+    order.returnReceivedAt = null;
+    order.returnReceivedNote = "";
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Your return request was sent to the pharmacy.",
+      order,
+    });
+  } catch (error) {
+    console.error("REQUEST MEDICINE RETURN FAILED", error.name || "DatabaseError");
+    return res.status(500).json({
+      success: false,
+      message: "Unable to submit the return request. Please try again.",
+    });
+  }
+};
+
+const decideMedicineReturn = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?.id).select("role phone");
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found." });
+    }
+    if (!(await findOrderOwnedByPharmacyUser(order, user))) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only review return requests sent to your pharmacy.",
+      });
+    }
+    if (order.returnRequestStatus !== "REQUESTED") {
+      return res.status(409).json({
+        success: false,
+        message: "This return request is no longer waiting for review.",
+      });
+    }
+
+    const decision = String(req.body?.decision || "").trim().toUpperCase();
+    if (decision !== "APPROVED" && decision !== "REJECTED") {
+      return res.status(400).json({
+        success: false,
+        message: "Choose whether to approve or reject this return request.",
+      });
+    }
+    const note = String(req.body?.note || "").trim();
+    if (note.length > 1000 || (decision === "REJECTED" && note.length < 5)) {
+      return res.status(400).json({
+        success: false,
+        message: decision === "REJECTED"
+          ? "Please provide a reason when declining a return."
+          : "The return note cannot exceed 1000 characters.",
+      });
+    }
+
+    order.returnRequestStatus = decision;
+    order.returnDecisionAt = new Date();
+    order.returnDecisionNote = note;
+    await order.save();
+    return res.status(200).json({
+      success: true,
+      message: decision === "APPROVED"
+        ? "Return request approved. Mark it received when the medicine arrives."
+        : "Return request declined.",
+      order,
+    });
+  } catch (error) {
+    console.error("DECIDE MEDICINE RETURN FAILED", error.name || "DatabaseError");
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update this return request. Please try again.",
+    });
+  }
+};
+
+const markMedicineReturnReceived = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?.id).select("role phone");
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found." });
+    }
+    if (!(await findOrderOwnedByPharmacyUser(order, user))) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only receive returns sent to your pharmacy.",
+      });
+    }
+    if (order.returnRequestStatus !== "APPROVED") {
+      return res.status(409).json({
+        success: false,
+        message: "Approve the return request before marking it received.",
+      });
+    }
+
+    const note = String(req.body?.note || "").trim();
+    if (note.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "The received note cannot exceed 1000 characters.",
+      });
+    }
+    order.returnRequestStatus = "RECEIVED";
+    order.returnReceivedAt = new Date();
+    order.returnReceivedNote = note;
+    await order.save();
+    return res.status(200).json({
+      success: true,
+      message: "Returned medicine marked as received.",
+      order,
+    });
+  } catch (error) {
+    console.error("MARK MEDICINE RETURN RECEIVED FAILED", error.name || "DatabaseError");
+    return res.status(500).json({
+      success: false,
+      message: "Unable to mark this return received. Please try again.",
+    });
+  }
+};
 
 // ============================================================
 // HELPER: NORMALIZE PAYMENT METHOD
@@ -2788,6 +2987,8 @@ const verifyDeliveryOtp =
       order.status =
         "Delivered";
 
+      order.deliveredAt = new Date();
+
       await order.save();
 
       console.log("");
@@ -3037,6 +3238,9 @@ module.exports = {
   confirmPrescriptionOrder,
   getPharmacyOrders,
   getPatientOrders,
+  requestMedicineReturn,
+  decideMedicineReturn,
+  markMedicineReturnReceived,
   updateOrderStatus,
   assignDeliveryAgent,
   removeDeliveryAgent,
