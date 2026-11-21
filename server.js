@@ -19,6 +19,7 @@ const profileRoutes = require("./routes/profileRoutes");
 const medicineRoutes = require("./routes/medicineRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const cartRoutes = require("./routes/cartRoutes");
+const labTestCartRoutes = require("./routes/labTestCartRoutes");
 const labOrderRoutes = require("./routes/labOrderRoutes");
 const sampleCollectorRoutes = require("./routes/sampleCollectorRoutes");
 const prescriptionRoutes = require("./routes/prescriptionRoutes");
@@ -174,6 +175,11 @@ app.use(
 app.use(
   "/api/cart",
   cartRoutes
+);
+
+app.use(
+  "/api/lab-test-cart",
+  labTestCartRoutes
 );
 
 console.log("Cart Routes Loaded Successfully");
