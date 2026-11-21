@@ -21,6 +21,7 @@ const {
   parseAppointmentTime,
   formatAppointmentTime,
   parseCalendarDate,
+  getIndiaCurrentDateTime,
   getDoctorSlotConfig,
   expireStaleVideoReservations,
   validateDoctorSlot,
@@ -560,7 +561,7 @@ exports.getAvailableSlots = async (req, res) => {
       return res.status(404).json({ success: false, message: "Doctor not found" });
     }
 
-    const config = getDoctorSlotConfig(doctor, consultationType);
+    const config = getDoctorSlotConfig(doctor, consultationType, appointmentDate);
     if (!config) {
       return res.status(400).json({ success: false, message: "Invalid doctor's schedule for this consultation type" });
     }
@@ -569,9 +570,8 @@ exports.getAvailableSlots = async (req, res) => {
       return res.status(400).json({ success: false, message: "Date must be valid and use YYYY-MM-DD format" });
     }
 
-    const today = new Date();
-    const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-    if (requestedDate < todayUtc) {
+    const indiaNow = getIndiaCurrentDateTime();
+    if (appointmentDate < indiaNow.date) {
       return res.status(200).json({ success: true, doctorId, date: appointmentDate, consultationType, slots: [] });
     }
 
@@ -605,21 +605,12 @@ exports.getAvailableSlots = async (req, res) => {
       doctor.maxAppointmentsPerDay ||
       10
     );
-    if (appointmentsForType.length >= dailyLimit) {
-      return res.status(200).json({
-        success: true,
-        doctorId,
-        date: appointmentDate,
-        consultationType,
-        slots: [],
-        message: "Doctor's daily appointment limit has been reached",
-      });
-    }
+    const dailyLimitReached = appointmentsForType.length >= dailyLimit;
 
     const bookedRanges = bookedAppointments
       .map((appointment) => {
         const bookedStart = parseAppointmentTime(appointment.appointmentTime);
-        const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType);
+        const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType, appointmentDate);
         const bookedDuration = bookedConfig?.duration || config.duration;
         return bookedStart === null ? null : [bookedStart, bookedStart + bookedDuration];
       })
@@ -627,16 +618,21 @@ exports.getAvailableSlots = async (req, res) => {
 
     const slots = [];
     for (let time = config.start; time + config.duration <= config.end; time += config.duration) {
+      // The app stores appointment dates and times in the doctor's local
+      // calendar (India). Hide slots that have already started today.
+      if (appointmentDate === indiaNow.date && time <= indiaNow.minutes) continue;
       const slotEnd = time + config.duration;
       const overlapsBreak = config.breakStart !== null && config.breakEnd !== null &&
         time < config.breakEnd && slotEnd > config.breakStart;
       if (overlapsBreak) continue;
 
+      const isBooked = bookedRanges.some(([bookedStart, bookedEnd]) =>
+        bookedStart < slotEnd && bookedEnd > time
+      );
       slots.push({
         time: formatAppointmentTime(time),
-        available: !bookedRanges.some(([bookedStart, bookedEnd]) =>
-          bookedStart < slotEnd && bookedEnd > time
-        ),
+        available: !dailyLimitReached && !isBooked,
+        unavailableReason: isBooked ? "booked" : dailyLimitReached ? "daily_limit" : null,
       });
     }
 
@@ -646,6 +642,7 @@ exports.getAvailableSlots = async (req, res) => {
       date: appointmentDate,
       consultationType,
       slots,
+      ...(dailyLimitReached ? { message: "Doctor's daily appointment limit has been reached" } : {}),
     });
   } catch (error) {
     console.error("GET AVAILABLE SLOTS ERROR:", error);

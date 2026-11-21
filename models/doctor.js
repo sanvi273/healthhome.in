@@ -1,5 +1,21 @@
 const mongoose = require("mongoose");
 
+const dayScheduleSchema = new mongoose.Schema(
+  {
+    day: {
+      type: String,
+      required: true,
+      enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+    },
+    enabled: { type: Boolean, default: false },
+    startTime: { type: String, default: "10:00" },
+    endTime: { type: String, default: "19:30" },
+    breakStart: { type: String, default: "13:00" },
+    breakEnd: { type: String, default: "14:00" },
+  },
+  { _id: false },
+);
+
 const consultationScheduleSchema = new mongoose.Schema(
   {
     workingDays: {
@@ -10,6 +26,7 @@ const consultationScheduleSchema = new mongoose.Schema(
     endTime: { type: String, default: "19:30" },
     breakStart: { type: String, default: "13:00" },
     breakEnd: { type: String, default: "14:00" },
+    daySchedules: { type: [dayScheduleSchema], default: undefined },
     slotDurationMinutes: { type: Number, default: 30, min: 10, max: 120 },
     maxAppointmentsPerDay: { type: Number, default: 10, min: 1, max: 100 },
   },

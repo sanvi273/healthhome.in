@@ -380,7 +380,47 @@ const updateDoctorSchedule = async (req, res) => {
         if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) {
           throw new Error(`${label} schedule is required`);
         }
-        const days = schedule.workingDays;
+        let days = schedule.workingDays;
+        let daySchedules;
+        if (schedule.daySchedules !== undefined) {
+          if (!Array.isArray(schedule.daySchedules) || schedule.daySchedules.length !== WEEKDAYS.length) {
+            throw new Error(`${label} must include a schedule entry for every weekday`);
+          }
+          const scheduledDays = schedule.daySchedules.map((entry) => entry?.day);
+          if (
+            scheduledDays.some((day) => !WEEKDAYS.includes(day)) ||
+            new Set(scheduledDays).size !== WEEKDAYS.length ||
+            WEEKDAYS.some((day) => !scheduledDays.includes(day))
+          ) {
+            throw new Error(`${label} must include each weekday exactly once`);
+          }
+
+          daySchedules = schedule.daySchedules.map((entry) => {
+            if (typeof entry.enabled !== "boolean") {
+              throw new Error(`${label} ${entry.day} must be marked working or off`);
+            }
+            const startTime = String(entry.startTime || "");
+            const endTime = String(entry.endTime || "");
+            const breakStart = String(entry.breakStart || "");
+            const breakEnd = String(entry.breakEnd || "");
+            if (entry.enabled && (
+              !isValidTime(startTime) || !isValidTime(endTime) || startTime >= endTime
+            )) {
+              throw new Error(`${label} ${entry.day} must have valid hours, with start before end`);
+            }
+            if (entry.enabled && Boolean(breakStart) !== Boolean(breakEnd)) {
+              throw new Error(`${label} ${entry.day} break start and end must both be provided or empty`);
+            }
+            if (entry.enabled && breakStart && (
+              !isValidTime(breakStart) || !isValidTime(breakEnd) ||
+              breakStart >= breakEnd || breakStart < startTime || breakEnd > endTime
+            )) {
+              throw new Error(`${label} ${entry.day} break must fall within working hours`);
+            }
+            return { day: entry.day, enabled: entry.enabled, startTime, endTime, breakStart, breakEnd };
+          });
+          days = daySchedules.filter((entry) => entry.enabled).map((entry) => entry.day);
+        }
         if (
           !Array.isArray(days) ||
           days.length === 0 ||
@@ -390,10 +430,11 @@ const updateDoctorSchedule = async (req, res) => {
           throw new Error(`${label} workingDays must contain unique valid weekdays`);
         }
 
-        const start = schedule.startTime;
-        const end = schedule.endTime;
-        const breakStart = schedule.breakStart || "";
-        const breakEnd = schedule.breakEnd || "";
+        const firstWorkingDay = daySchedules?.find((entry) => entry.enabled);
+        const start = firstWorkingDay?.startTime ?? schedule.startTime;
+        const end = firstWorkingDay?.endTime ?? schedule.endTime;
+        const breakStart = firstWorkingDay?.breakStart ?? schedule.breakStart ?? "";
+        const breakEnd = firstWorkingDay?.breakEnd ?? schedule.breakEnd ?? "";
         if (!isValidTime(start) || !isValidTime(end) || start >= end) {
           throw new Error(`${label} startTime and endTime must be valid, with start before end`);
         }
@@ -402,9 +443,9 @@ const updateDoctorSchedule = async (req, res) => {
         }
         if (breakStart && (
           !isValidTime(breakStart) || !isValidTime(breakEnd) ||
-          breakStart >= breakEnd || breakStart < start || breakEnd > end
+          breakStart >= breakEnd
         )) {
-          throw new Error(`${label} break must fall within working hours`);
+          throw new Error(`${label} break times must be valid, with the start before the end`);
         }
 
         const duration = Number(schedule.slotDurationMinutes);
@@ -422,6 +463,7 @@ const updateDoctorSchedule = async (req, res) => {
           endTime: end,
           breakStart,
           breakEnd,
+          ...(daySchedules ? { daySchedules } : {}),
           slotDurationMinutes: duration,
           maxAppointmentsPerDay: maxAppointments,
         };
@@ -566,13 +608,11 @@ const updateDoctorSchedule = async (req, res) => {
       if (
         !isValidTime(finalBreakStart) ||
         !isValidTime(finalBreakEnd) ||
-        finalBreakStart >= finalBreakEnd ||
-        finalBreakStart < finalStart ||
-        finalBreakEnd > finalEnd
+        finalBreakStart >= finalBreakEnd
       ) {
         return res.status(400).json({
           success: false,
-          message: "Break times must fall within working hours",
+          message: "Break times must be valid, with the start before the end",
         });
       }
     }

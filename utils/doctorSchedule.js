@@ -51,29 +51,59 @@ const parseCalendarDate = (value) => {
     date.getUTCDate() === day ? date : null;
 };
 
-const getDoctorSlotConfig = (doctor, consultationType) => {
+const getIndiaCurrentDateTime = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type)?.value || "00";
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    minutes: Number(value("hour")) * 60 + Number(value("minute")),
+  };
+};
+
+const getDoctorSlotConfig = (doctor, consultationType, date) => {
   const scheduleKey = scheduleKeyForType(consultationType);
   const schedules = doctor?.consultationSchedules;
   const nestedSchedule = schedules?.[scheduleKey];
   // Doctors with an older profile keep using their existing shared hours
   // until they save the new separate schedules.
   const schedule = nestedSchedule || doctor;
-  const start = parseAppointmentTime(schedule?.startTime);
-  const end = parseAppointmentTime(schedule?.endTime);
-  const breakStart = schedule?.breakStart
-    ? parseAppointmentTime(schedule.breakStart)
+  const parsedDate = date ? parseCalendarDate(date) : null;
+  const requestedDay = parsedDate
+    ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][parsedDate.getUTCDay()]
     : null;
-  const breakEnd = schedule?.breakEnd
-    ? parseAppointmentTime(schedule.breakEnd)
+  const daySchedules = Array.isArray(schedule?.daySchedules)
+    ? schedule.daySchedules
+    : null;
+  const daySchedule = requestedDay && daySchedules
+    ? daySchedules.find((entry) => String(entry.day) === requestedDay)
+    : null;
+  const effectiveSchedule = daySchedule?.enabled ? daySchedule : schedule;
+  const start = parseAppointmentTime(effectiveSchedule?.startTime);
+  const end = parseAppointmentTime(effectiveSchedule?.endTime);
+  const breakStart = effectiveSchedule?.breakStart
+    ? parseAppointmentTime(effectiveSchedule.breakStart)
+    : null;
+  const breakEnd = effectiveSchedule?.breakEnd
+    ? parseAppointmentTime(effectiveSchedule.breakEnd)
     : null;
   const duration = Number(schedule?.slotDurationMinutes);
-  const workingDays = Array.isArray(schedule?.workingDays)
-    ? schedule.workingDays
-    : [];
+  const workingDays = daySchedules
+    ? daySchedules.filter((entry) => entry.enabled).map((entry) => entry.day)
+    : Array.isArray(schedule?.workingDays)
+      ? schedule.workingDays
+      : [];
 
   if (
     start === null || end === null || start >= end ||
-    (Boolean(schedule?.breakStart) !== Boolean(schedule?.breakEnd)) ||
+    (Boolean(effectiveSchedule?.breakStart) !== Boolean(effectiveSchedule?.breakEnd)) ||
     (breakStart !== null && breakEnd !== null && breakStart >= breakEnd) ||
     !Number.isFinite(duration) || duration <= 0 || workingDays.length === 0
   ) return null;
@@ -123,11 +153,10 @@ const validateDoctorSlot = async ({
 
   const parsedDate = parseCalendarDate(date);
   if (!parsedDate) return "Date must be valid and use YYYY-MM-DD format.";
-  const today = new Date();
-  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-  if (parsedDate < todayUtc) return "Past appointment dates are not allowed.";
+  const indiaNow = getIndiaCurrentDateTime();
+  if (date < indiaNow.date) return "Past appointment dates are not allowed.";
 
-  const config = getDoctorSlotConfig(doctor, consultationType);
+  const config = getDoctorSlotConfig(doctor, consultationType, date);
   if (!config) return "Doctor's schedule is incomplete or invalid.";
   const dayIndex = parsedDate.getUTCDay();
   const dayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][dayIndex];
@@ -137,6 +166,9 @@ const validateDoctorSlot = async ({
 
   const requestedMinutes = parseAppointmentTime(time);
   if (requestedMinutes === null) return "Invalid appointment time.";
+  if (date === indiaNow.date && requestedMinutes <= indiaNow.minutes) {
+    return "Appointment times that have already started are not allowed.";
+  }
   if (
     requestedMinutes < config.start || requestedMinutes >= config.end ||
     (requestedMinutes - config.start) % config.duration !== 0 ||
@@ -173,7 +205,7 @@ const validateDoctorSlot = async ({
   const overlapsExisting = activeAppointments.some((appointment) => {
     const bookedStart = parseAppointmentTime(appointment.appointmentTime);
     if (bookedStart === null) return false;
-    const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType);
+    const bookedConfig = getDoctorSlotConfig(doctor, appointment.consultationType, date);
     const bookedDuration = bookedConfig?.duration || config.duration;
     return bookedStart < requestedEnd && bookedStart + bookedDuration > requestedMinutes;
   });
@@ -188,6 +220,7 @@ module.exports = {
   parseAppointmentTime,
   formatAppointmentTime,
   parseCalendarDate,
+  getIndiaCurrentDateTime,
   getDoctorSlotConfig,
   expireStaleVideoReservations,
   validateDoctorSlot,
