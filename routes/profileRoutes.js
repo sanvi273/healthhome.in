@@ -6,12 +6,14 @@ const {
   saveProfile,
   getProfile,
   getMyProfile,
+  updateMyProfile,
   uploadMyProfileImage,
 } = require("../controllers/profileController");
 const authMiddleware = require("../middleware/authMiddleware");
 const profileImageUpload = require("../middleware/profileImageUpload");
 
 router.get("/me", authMiddleware, getMyProfile);
+router.put("/me", authMiddleware, updateMyProfile);
 router.post(
   "/me/image",
   authMiddleware,

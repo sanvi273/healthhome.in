@@ -103,6 +103,157 @@ exports.getMyProfile = async (req, res) => {
   }
 };
 
+const editableFieldsByRole = {
+  patient: ["age", "gender", "bloodGroup", "height", "weight"],
+  doctor: ["specialization", "experience", "fees", "hospital", "about"],
+  laboratory: ["labType", "experience", "address"],
+  pharmacy: ["shopType", "experience", "address"],
+};
+
+const requiredFieldsByRole = {
+  patient: [],
+  doctor: ["specialization", "experience", "fees", "hospital"],
+  laboratory: ["labType", "experience", "address"],
+  pharmacy: ["shopType", "experience", "address"],
+};
+
+const profileText = (value) => {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+};
+
+exports.updateMyProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found.",
+      });
+    }
+
+    const editableFields = editableFieldsByRole[user.role];
+    if (!editableFields) {
+      return res.status(403).json({
+        success: false,
+        message: "This account cannot edit a profile.",
+      });
+    }
+
+    const name = profileText(req.body?.name);
+    if (!name || name.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a name of 1 to 100 characters.",
+      });
+    }
+
+    const updates = { name };
+    for (const field of editableFields) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
+        const value = profileText(req.body[field]);
+        if (value.length > (field === "about" || field === "address" ? 2000 : 120)) {
+          return res.status(400).json({
+            success: false,
+            message: `${field} is too long.`,
+          });
+        }
+        updates[field] = value;
+      }
+    }
+
+    for (const field of requiredFieldsByRole[user.role]) {
+      if (!updates[field]) {
+        return res.status(400).json({
+          success: false,
+          message: `Please enter ${field}.`,
+        });
+      }
+    }
+
+    if (user.role === "patient") {
+      if (updates.age) {
+        const age = Number(updates.age);
+        if (!Number.isInteger(age) || age < 0 || age > 120) {
+          return res.status(400).json({
+            success: false,
+            message: "Enter an age from 0 to 120.",
+          });
+        }
+      }
+      for (const field of ["height", "weight"]) {
+        if (!updates[field]) continue;
+        const measurement = Number(updates[field]);
+        if (!Number.isFinite(measurement) || measurement <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Enter a valid ${field}.`,
+          });
+        }
+      }
+    }
+
+    if (user.role === "patient") {
+      if (!user.phone) {
+        return res.status(400).json({
+          success: false,
+          message: "A phone number is required to update this patient profile.",
+        });
+      }
+
+      await Profile.findOneAndUpdate(
+        { userId: user.phone },
+        { $set: { userId: user.phone, ...updates } },
+        { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true },
+      );
+    } else {
+      const professionalProfile = await findOwnedProfessionalProfile(user);
+      if (!professionalProfile) {
+        return res.status(404).json({
+          success: false,
+          message: "Your professional profile was not found. Please complete profile setup first.",
+        });
+      }
+
+      professionalProfile.set({
+        ...updates,
+        // Claim legacy phone-linked profiles for this authenticated owner.
+        userId: user._id,
+      });
+      await professionalProfile.validate();
+
+      user.name = name;
+      await user.save();
+      await professionalProfile.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Profile updated successfully.",
+        profile: await buildCurrentProfile(user),
+      });
+    }
+
+    user.name = name;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully.",
+      profile: await buildCurrentProfile(user),
+    });
+  } catch (error) {
+    console.error("PROFILE UPDATE FAILED", {
+      role: req.user?.role,
+      errorType: error.name || "DatabaseError",
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update your profile. Please try again.",
+    });
+  }
+};
+
 exports.uploadMyProfileImage = async (req, res) => {
   let uploadedImage = null;
   let savedToUser = false;
