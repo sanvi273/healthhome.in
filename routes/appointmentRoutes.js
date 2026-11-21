@@ -193,7 +193,7 @@ router.put(
 
 router.put(
   "/complete/:id",
-
+  authMiddleware,
   completeConsultation
 );
 

@@ -2005,31 +2005,27 @@ exports.completeConsultation =
 
     try {
 
-      const appointment =
+      const appointmentId = String(req.params.id || "");
+      if (!/^[a-f\d]{24}$/i.test(appointmentId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid appointment ID",
+        });
+      }
 
-        await Appointment.findByIdAndUpdate(
+      const authenticatedDoctor = await User.findById(req.user?.id);
+      if (
+        !authenticatedDoctor ||
+        authenticatedDoctor.role !== "doctor" ||
+        authenticatedDoctor.verificationStatus !== "APPROVED"
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "An approved doctor account is required",
+        });
+      }
 
-          req.params.id,
-
-          {
-
-            status:
-
-              "Completed",
-
-            consultationStatus:
-
-              "Completed",
-
-          },
-
-          {
-
-            new: true,
-
-          }
-
-        );
+      const appointment = await Appointment.findById(appointmentId);
 
       if (!appointment) {
 
@@ -2044,6 +2040,61 @@ exports.completeConsultation =
         });
 
       }
+
+      const doctorOwnership = {
+        $or: [
+          { userId: authenticatedDoctor._id },
+          { userId: null, phone: authenticatedDoctor.phone },
+          {
+            userId: { $exists: false },
+            phone: authenticatedDoctor.phone,
+          },
+        ],
+      };
+      const appointmentDoctorId = String(appointment.doctorId || "");
+      const ownedDoctor = /^[a-f\d]{24}$/i.test(appointmentDoctorId)
+        ? await Doctor.findOne({
+            _id: appointmentDoctorId,
+            ...doctorOwnership,
+          })
+        : null;
+      const directUserIdMatches =
+        appointmentDoctorId === String(authenticatedDoctor._id);
+
+      if (!ownedDoctor && !directUserIdMatches) {
+        return res.status(403).json({
+          success: false,
+          message: "You are not authorized to complete this appointment",
+        });
+      }
+
+      if (appointment.consultationType !== "Video Consultation") {
+        return res.status(400).json({
+          success: false,
+          message: "This appointment is not a video consultation",
+        });
+      }
+
+      if (
+        !["Accepted", "Upcoming"].includes(appointment.status) ||
+        !["Ready", "Joined"].includes(appointment.consultationStatus)
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "Start the video consultation before completing this appointment",
+        });
+      }
+
+      if (appointment.paymentStatus !== "Paid") {
+        return res.status(403).json({
+          success: false,
+          message: "Complete online payment before completing the video consultation",
+        });
+      }
+
+      appointment.status = "Completed";
+      appointment.consultationStatus = "Completed";
+      await appointment.save();
 
       return res.json({
 
