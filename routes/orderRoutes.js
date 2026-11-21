@@ -7,9 +7,7 @@ const router = express.Router();
 
 const {
   placeOrder,
-  placeFamilyMemberOrder,
   placePrescriptionOrder,
-  placeFamilyMemberPrescriptionOrder,
   confirmPrescriptionOrder,
 
   getPharmacyOrders,
@@ -53,12 +51,6 @@ router.post(
   placeOrder
 );
 
-router.post(
-  "/family-member/place",
-  authMiddleware,
-  placeFamilyMemberOrder
-);
-
 // ============================================================
 // PRESCRIPTION IMAGE ORDER
 // ============================================================
@@ -66,12 +58,6 @@ router.post(
 router.post(
   "/prescription",
   placePrescriptionOrder
-);
-
-router.post(
-  "/family-member/prescription",
-  authMiddleware,
-  placeFamilyMemberPrescriptionOrder
 );
 
 // ============================================================

@@ -1,10 +1,8 @@
 const crypto = require("crypto");
-const mongoose = require("mongoose");
 
 const Order = require("../models/orderModel");
 const Medicine = require("../models/medicine");
 const Pharmacy = require("../models/pharmacy");
-const FamilyMember = require("../models/FamilyMember");
 const User = require("../models/user");
 
 const escapeRegExp = (value) =>
@@ -732,7 +730,6 @@ const placeOrder = async (
       patientId,
       patientName,
       patientPhone,
-      familyMemberId,
 
       pharmacyId,
       pharmacyName,
@@ -1063,8 +1060,6 @@ const placeOrder = async (
             patientPhone
           ).trim(),
 
-        familyMemberId: req.familyMemberOrderAuthorized ? familyMemberId || "" : "",
-
         pharmacyId:
           String(
             pharmacy._id
@@ -1282,7 +1277,6 @@ const placePrescriptionOrder =
         patientId,
         patientName,
         patientPhone,
-        familyMemberId,
 
         pharmacyId,
         pharmacyName,
@@ -1376,8 +1370,6 @@ const placePrescriptionOrder =
             String(
               patientPhone
             ).trim(),
-
-          familyMemberId: req.familyMemberOrderAuthorized ? familyMemberId || "" : "",
 
           pharmacyId:
             String(
@@ -1487,9 +1479,6 @@ const placePrescriptionOrder =
           patientPhone:
             order.patientPhone,
 
-          familyMemberId:
-            order.familyMemberId || "",
-
           pharmacyId:
             order.pharmacyId,
 
@@ -1561,66 +1550,6 @@ const placePrescriptionOrder =
       });
     }
   };
-
-const applyFamilyMemberOrderIdentity = async (req, res) => {
-  const user = await User.findById(req.user?.id).select("_id role phone accountStatus");
-  if (!user || user.role !== "patient" || user.accountStatus !== "ACTIVE") {
-    res.status(403).json({
-      success: false,
-      message: "An active patient account is required to place an order for a family member.",
-    });
-    return false;
-  }
-
-  const familyMemberId = String(req.body?.familyMemberId || "").trim();
-  if (!mongoose.Types.ObjectId.isValid(familyMemberId)) {
-    res.status(400).json({ success: false, message: "A valid family member is required." });
-    return false;
-  }
-  const familyMember = await FamilyMember.findOne({
-    _id: familyMemberId,
-    patientId: user._id,
-  });
-  if (!familyMember) {
-    res.status(404).json({ success: false, message: "Family member was not found in your account." });
-    return false;
-  }
-  if (!String(user.phone || "").trim()) {
-    res.status(400).json({ success: false, message: "A contact phone number is required on your account." });
-    return false;
-  }
-
-  req.body = {
-    ...req.body,
-    patientId: String(user._id),
-    patientName: familyMember.name,
-    patientPhone: user.phone,
-    familyMemberId: String(familyMember._id),
-    address: String(req.body?.address || familyMember.address || "").trim(),
-  };
-  req.familyMemberOrderAuthorized = true;
-  return true;
-};
-
-const placeFamilyMemberOrder = async (req, res) => {
-  try {
-    if (!(await applyFamilyMemberOrderIdentity(req, res))) return;
-    return placeOrder(req, res);
-  } catch (error) {
-    console.error("PLACE FAMILY MEMBER ORDER FAILED", error.name || "DatabaseError");
-    return res.status(500).json({ success: false, message: "Unable to place this family member's order." });
-  }
-};
-
-const placeFamilyMemberPrescriptionOrder = async (req, res) => {
-  try {
-    if (!(await applyFamilyMemberOrderIdentity(req, res))) return;
-    return placePrescriptionOrder(req, res);
-  } catch (error) {
-    console.error("PLACE FAMILY MEMBER PRESCRIPTION ORDER FAILED", error.name || "DatabaseError");
-    return res.status(500).json({ success: false, message: "Unable to place this family member's prescription order." });
-  }
-};
 
 // ============================================================
 // CONFIRM PRESCRIPTION ORDER
@@ -3305,9 +3234,7 @@ const getAllOrders =
 
 module.exports = {
   placeOrder,
-  placeFamilyMemberOrder,
   placePrescriptionOrder,
-  placeFamilyMemberPrescriptionOrder,
   confirmPrescriptionOrder,
   getPharmacyOrders,
   getPatientOrders,

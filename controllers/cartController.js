@@ -1,7 +1,5 @@
 const Cart = require("../models/cartModel");
 const Medicine = require("../models/medicine");
-const FamilyMember = require("../models/FamilyMember");
-const User = require("../models/user");
 
 // =========================
 // Add Medicine To Cart
@@ -28,9 +26,6 @@ const addToCart = async (req, res) => {
     const cart = await Cart.create({
       patientPhone: req.body.patientPhone,
       patientName: req.body.patientName,
-      familyMemberId: req.familyMemberAuthorized
-        ? String(req.body.familyMemberId || "").trim()
-        : "",
 
       medicineId: medicine._id,
       medicine: medicine.medicineName,
@@ -71,9 +66,8 @@ const addToCart = async (req, res) => {
 const getCart = async (req, res) => {
   try {
     const items = await Cart.find({
-      patientPhone: req.params.patientPhone,
-      familyMemberId: { $in: ["", null] },
-    });
+  patientPhone: req.params.patientPhone,
+});
 
     console.log("TOTAL CART ITEMS =", items.length);
     console.log(items);
@@ -90,46 +84,6 @@ const getCart = async (req, res) => {
       success: false,
       message: e.toString(),
     });
-  }
-};
-
-const addFamilyMemberToCart = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?.id).select("_id phone role");
-    const memberId = String(req.body.familyMemberId || "").trim();
-    if (!user || user.role !== "patient" || !memberId) {
-      return res.status(403).json({ success: false, message: "A patient account and family member are required." });
-    }
-    const member = await FamilyMember.findOne({ _id: memberId, patientId: user._id });
-    if (!member) {
-      return res.status(404).json({ success: false, message: "Family member was not found in your account." });
-    }
-    req.body.patientPhone = user.phone;
-    req.body.patientName = member.name;
-    req.familyMemberAuthorized = true;
-    return addToCart(req, res);
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to add medicine to this family member's cart." });
-  }
-};
-
-const getFamilyMemberCart = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?.id).select("_id phone role");
-    const member = await FamilyMember.findOne({
-      _id: req.params.id,
-      patientId: user?._id,
-    }).select("_id");
-    if (!user || user.role !== "patient" || !member) {
-      return res.status(404).json({ success: false, message: "Family member was not found in your account." });
-    }
-    const items = await Cart.find({
-      patientPhone: user.phone,
-      familyMemberId: String(member._id),
-    });
-    return res.status(200).json({ success: true, items });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to load this family member's cart." });
   }
 };
 
@@ -238,7 +192,6 @@ const clearCart = async (req, res) => {
   try {
     await Cart.deleteMany({
       patientPhone: req.params.patientPhone,
-      familyMemberId: { $in: ["", null] },
     });
 
     return res.status(200).json({
@@ -254,32 +207,9 @@ const clearCart = async (req, res) => {
   }
 };
 
-const clearFamilyMemberCart = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?.id).select("_id role phone");
-    const member = await FamilyMember.findOne({
-      _id: req.params.id,
-      patientId: user?._id,
-    }).select("_id");
-    if (!user || user.role !== "patient" || !member) {
-      return res.status(404).json({ success: false, message: "Family member was not found in your account." });
-    }
-    await Cart.deleteMany({
-      patientPhone: user.phone,
-      familyMemberId: String(member._id),
-    });
-    return res.status(200).json({ success: true, message: "Family member cart cleared successfully." });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to clear this family member's cart." });
-  }
-};
-
 module.exports = {
   addToCart,
-  addFamilyMemberToCart,
   getCart,
-  getFamilyMemberCart,
-  clearFamilyMemberCart,
   deleteItem,
   increaseQuantity,
   decreaseQuantity,

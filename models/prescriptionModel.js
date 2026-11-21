@@ -32,13 +32,6 @@ const prescriptionSchema = new mongoose.Schema(
       default: "",
     },
 
-    familyMemberId: {
-      type: String,
-      default: "",
-      trim: true,
-      index: true,
-    },
-
     // =====================================================
     // DOCTOR DETAILS
     // =====================================================

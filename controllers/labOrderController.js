@@ -2,7 +2,6 @@ const LabOrder = require("../models/labOrder");
 const SampleCollector = require("../models/sampleCollector");
 const Lab = require("../models/lab");
 const User = require("../models/user");
-const FamilyMember = require("../models/FamilyMember");
 const crypto = require("crypto");
 
 // ============================================================
@@ -22,7 +21,6 @@ const addLabOrder = async (req, res) => {
       collectionMode,
       bookingType,
       paymentMethod,
-      familyMemberId: requestedFamilyMemberId,
     } = req.body;
 
     const authenticatedUser = await User.findById(req.user?.id);
@@ -44,33 +42,8 @@ const addLabOrder = async (req, res) => {
     }
 
     const patientId = String(authenticatedUser._id);
-    let patientName = String(authenticatedUser.name || "").trim();
+    const patientName = String(authenticatedUser.name || "").trim();
     const patientPhone = String(authenticatedUser.phone || "").trim();
-    let familyMemberId = "";
-    let resolvedAddress = String(address || "").trim();
-
-    if (requestedFamilyMemberId) {
-      const memberId = String(requestedFamilyMemberId).trim();
-      if (!/^[a-f\d]{24}$/i.test(memberId)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid family member ID.",
-        });
-      }
-      const familyMember = await FamilyMember.findOne({
-        _id: memberId,
-        patientId: authenticatedUser._id,
-      }).select("_id name address");
-      if (!familyMember) {
-        return res.status(404).json({
-          success: false,
-          message: "Family member was not found in your account.",
-        });
-      }
-      patientName = String(familyMember.name || "").trim();
-      familyMemberId = String(familyMember._id);
-      if (!resolvedAddress) resolvedAddress = String(familyMember.address || "").trim();
-    }
     if (!patientName || !patientPhone) {
       return res.status(400).json({
         success: false,
@@ -124,7 +97,7 @@ const addLabOrder = async (req, res) => {
 
     if (
       finalCollectionMode === "Home Collection" &&
-      !resolvedAddress
+      !String(address || "").trim()
     ) {
       return res.status(400).json({
         success: false,
@@ -211,7 +184,6 @@ const addLabOrder = async (req, res) => {
 
     const order = await LabOrder.create({
       patientId,
-      familyMemberId,
       patientName,
       patientPhone,
       doctorName: String(doctorName || "").trim(),
@@ -219,7 +191,7 @@ const addLabOrder = async (req, res) => {
       tests: finalTests,
       labId: String(lab._id),
       labName: String(lab.name || labName || ""),
-      address: resolvedAddress,
+      address: String(address || "").trim(),
       notes: String(notes || "").trim(),
       totalAmount,
       paymentMethod: finalPaymentMethod,

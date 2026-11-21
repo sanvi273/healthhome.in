@@ -74,13 +74,6 @@ const orderSchema = new mongoose.Schema(
       required: true,
     },
 
-    familyMemberId: {
-      type: String,
-      default: "",
-      trim: true,
-      index: true,
-    },
-
     // ========================================================
     // PHARMACY DETAILS
     // ========================================================

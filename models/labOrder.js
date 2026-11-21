@@ -70,13 +70,6 @@ const labOrderSchema = new mongoose.Schema(
       trim: true,
     },
 
-    familyMemberId: {
-      type: String,
-      default: "",
-      index: true,
-      trim: true,
-    },
-
     doctorName: {
       type: String,
       default: "",

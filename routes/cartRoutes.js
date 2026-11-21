@@ -5,16 +5,12 @@ console.log("✅ cartRoutes.js loaded");
 
 const {
   addToCart,
-  addFamilyMemberToCart,
   getCart,
-  getFamilyMemberCart,
-  clearFamilyMemberCart,
   deleteItem,
   increaseQuantity,
   decreaseQuantity,
   clearCart,
 } = require("../controllers/cartController");
-const authMiddleware = require("../middleware/authMiddleware");
 
 // ADD THIS
 router.get("/test", (req, res) => {
@@ -26,9 +22,6 @@ router.get("/test", (req, res) => {
 
 // Add medicine
 router.post("/add", addToCart);
-router.post("/family-member/add", authMiddleware, addFamilyMemberToCart);
-router.get("/family-member/:id", authMiddleware, getFamilyMemberCart);
-router.delete("/family-member/clear/:id", authMiddleware, clearFamilyMemberCart);
 
 // Increase quantity
 router.put("/increase/:id", increaseQuantity);
