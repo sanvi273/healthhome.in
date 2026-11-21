@@ -276,9 +276,26 @@ const appointmentSchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: ["ONLINE", "AT_HOSPITAL", ""],
+      enum: ["ONLINE", "AT_HOSPITAL", "FREE_RECONSULTATION", ""],
       default: "ONLINE",
       trim: true,
+    },
+
+    isReconsultation: {
+      type: Boolean,
+      default: false,
+    },
+
+    reconsultationOfferId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ReconsultationOffer",
+      default: undefined,
+    },
+
+    reconsultationForAppointmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Appointment",
+      default: null,
     },
 
     razorpayOrderId: {
@@ -351,6 +368,16 @@ appointmentSchema.index(
           "Accepted",
         ],
       },
+    },
+  }
+);
+
+appointmentSchema.index(
+  { reconsultationOfferId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      reconsultationOfferId: { $type: "objectId" },
     },
   }
 );

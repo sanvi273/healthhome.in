@@ -26,6 +26,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const videoCallRoutes = require("./routes/videoCallRoutes");
+const reconsultationRoutes = require("./routes/reconsultationRoutes");
 const termsRoutes = require("./routes/termsRoutes");
 const VideoCallSession = require("./models/VideoCallSession");
 
@@ -128,6 +129,7 @@ app.use(
 );
 
 app.use("/api/video-calls", videoCallRoutes);
+app.use("/api/reconsultations", reconsultationRoutes);
 
 // ============================================================
 // ADDRESS ROUTES
