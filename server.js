@@ -16,6 +16,7 @@ const pharmacyRoutes = require("./routes/pharmacyRoutes");
 const appointmentRoutes = require("./routes/appointmentRoutes");
 const addressRoutes = require("./routes/addressRoutes");
 const profileRoutes = require("./routes/profileRoutes");
+const familyMemberRoutes = require("./routes/familyMemberRoutes");
 const medicineRoutes = require("./routes/medicineRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const cartRoutes = require("./routes/cartRoutes");
@@ -149,6 +150,8 @@ app.use(
   "/api/profile",
   profileRoutes
 );
+
+app.use("/api/family-members", familyMemberRoutes);
 
 // ============================================================
 // MEDICINE ROUTES
