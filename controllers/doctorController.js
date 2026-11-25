@@ -87,23 +87,29 @@ const addDoctor = async (req, res) => {
       specialization,
       experience,
       fees,
+      videoConsultationFee,
+      hospitalVisitFee,
       hospital,
       about,
     } = req.body;
+
+    const legacyFee = String(fees ?? "").trim();
+    const videoFee = Number(videoConsultationFee ?? legacyFee);
+    const hospitalFee = Number(hospitalVisitFee ?? legacyFee);
 
     if (
       !name ||
       !specialization ||
       !experience ||
-      fees === undefined ||
-      fees === null ||
-      String(fees).trim() === "" ||
+      !Number.isFinite(videoFee) ||
+      videoFee <= 0 ||
+      !Number.isFinite(hospitalFee) ||
+      hospitalFee <= 0 ||
       !hospital
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Name, specialization, experience, fees and hospital are required",
+        message: "Enter valid video and hospital visit fees along with the required doctor profile details.",
       });
     }
 
@@ -122,7 +128,9 @@ const addDoctor = async (req, res) => {
       profileImagePublicId: user.profileImagePublicId || "",
       specialization: String(specialization).trim(),
       experience: String(experience).trim(),
-      fees: String(fees).trim(),
+      fees: String(hospitalFee),
+      videoConsultationFee: videoFee,
+      hospitalVisitFee: hospitalFee,
       hospital: String(hospital).trim(),
       about: about == null ? "" : String(about).trim(),
     };

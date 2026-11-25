@@ -15,6 +15,7 @@ const {
   formatAppointmentTime,
   validateDoctorSlot,
 } = require("../utils/doctorSchedule");
+const { getDoctorConsultationFee } = require("../utils/doctorConsultationFees");
 
 const appointmentWithoutReports = (appointment) => {
   const data =
@@ -772,8 +773,8 @@ exports.createDoctorOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Doctor not found." });
     }
 
-    const amount = Number(doctor.fees);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amount = getDoctorConsultationFee(doctor, normalizedConsultationType);
+    if (amount === null) {
       return res.status(400).json({ success: false, message: "Invalid doctor consultation fee in database." });
     }
 
@@ -964,6 +965,14 @@ exports.verifyDoctorPayment = async (req, res) => {
         success: false,
         paymentVerified: false,
         message: "Online payment is only accepted for video consultations.",
+      });
+    }
+
+    if (safeString(appointment.razorpayOrderId) !== razorpay_order_id) {
+      return res.status(400).json({
+        success: false,
+        paymentVerified: false,
+        message: "Razorpay order does not belong to this appointment.",
       });
     }
 

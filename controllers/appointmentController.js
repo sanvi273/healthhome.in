@@ -29,6 +29,7 @@ const {
 
 // Shared helpers for consistent appointment slot validation.
 const Doctor = require("../models/doctor");
+const { getDoctorConsultationFee } = require("../utils/doctorConsultationFees");
 
 const appointmentWithoutReports = (appointment) => {
   const data =
@@ -103,8 +104,6 @@ exports.bookAppointment =
         specialization,
 
         hospital,
-
-        fees,
 
         consultationType,
 
@@ -190,6 +189,16 @@ exports.bookAppointment =
       const doctorForBooking = await Doctor.findById(doctorId.toString());
       if (!doctorForBooking) {
         return res.status(404).json({ success: false, message: "Doctor not found" });
+      }
+      const consultationFee = getDoctorConsultationFee(
+        doctorForBooking,
+        finalConsultationType,
+      );
+      if (consultationFee === null) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid doctor consultation fee in database.",
+        });
       }
 
       const normalizedAppointmentTimeMinutes = parseAppointmentTime(appointmentTime);
@@ -315,9 +324,7 @@ exports.bookAppointment =
 
             hospital || "",
 
-          fees:
-
-            Number(fees || 0),
+          fees: consultationFee,
 
           // ---------------- Appointment ----------------
 

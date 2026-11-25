@@ -76,6 +76,13 @@ const buildCurrentProfile = async (user) => {
 
   if (user.role === "patient") {
     serialized.photo = profileImageUrl;
+  } else if (user.role === "doctor") {
+    const legacyFee = profile?.fees ?? "";
+    serialized.videoConsultationFee =
+      profile?.videoConsultationFee ?? legacyFee;
+    serialized.hospitalVisitFee =
+      profile?.hospitalVisitFee ?? legacyFee;
+    serialized.fees = serialized.hospitalVisitFee;
   }
 
   return serialized;
@@ -105,14 +112,28 @@ exports.getMyProfile = async (req, res) => {
 
 const editableFieldsByRole = {
   patient: ["age", "gender", "bloodGroup", "height", "weight"],
-  doctor: ["specialization", "experience", "fees", "hospital", "about"],
+  doctor: [
+    "specialization",
+    "experience",
+    "fees",
+    "videoConsultationFee",
+    "hospitalVisitFee",
+    "hospital",
+    "about",
+  ],
   laboratory: ["labType", "experience", "address"],
   pharmacy: ["shopType", "experience", "address"],
 };
 
 const requiredFieldsByRole = {
   patient: [],
-  doctor: ["specialization", "experience", "fees", "hospital"],
+  doctor: [
+    "specialization",
+    "experience",
+    "videoConsultationFee",
+    "hospitalVisitFee",
+    "hospital",
+  ],
   laboratory: ["labType", "experience", "address"],
   pharmacy: ["shopType", "experience", "address"],
 };
@@ -160,6 +181,45 @@ exports.updateMyProfile = async (req, res) => {
           });
         }
         updates[field] = value;
+      }
+    }
+
+    if (user.role === "doctor") {
+      const hasVideoFee = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        "videoConsultationFee",
+      );
+      const hasHospitalFee = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        "hospitalVisitFee",
+      );
+      const hasLegacyFee = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        "fees",
+      );
+
+      // Older app versions only submit one consultation fee. Preserve their
+      // edit flow by applying it to both appointment types.
+      if (!hasVideoFee && !hasHospitalFee && hasLegacyFee) {
+        updates.videoConsultationFee = updates.fees;
+        updates.hospitalVisitFee = updates.fees;
+      }
+
+      for (const field of ["videoConsultationFee", "hospitalVisitFee"]) {
+        if (updates[field] === undefined) continue;
+        const amount = Number(updates[field]);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Enter a valid positive ${field === "videoConsultationFee" ? "video consultation" : "hospital visit"} fee.`,
+          });
+        }
+        updates[field] = amount;
+      }
+
+      if (updates.hospitalVisitFee !== undefined) {
+        // Keep the legacy field useful for older clients and reports.
+        updates.fees = String(updates.hospitalVisitFee);
       }
     }
 

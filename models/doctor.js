@@ -74,6 +74,18 @@ const doctorSchema = new mongoose.Schema(
       trim: true,
     },
 
+    videoConsultationFee: {
+      type: Number,
+      min: 0,
+      default: undefined,
+    },
+
+    hospitalVisitFee: {
+      type: Number,
+      min: 0,
+      default: undefined,
+    },
+
     hospital: {
       type: String,
       required: true,

@@ -26,6 +26,16 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
     paymentRecord: null,
     paymentUpdate: null,
     webhookAppointmentUpdate: null,
+    doctor: {
+      _id: doctorId,
+      name: "Test Doctor",
+      fees: 700,
+      videoConsultationFee: 500,
+      hospitalVisitFee: 800,
+      specialization: "General Medicine",
+      hospital: "Test Clinic",
+    },
+    razorpayOrders: [],
   };
   const patient = {
     _id: patientId,
@@ -47,12 +57,16 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
   class FakeRazorpay {
     constructor() {
       this.orders = {
-        create: async (order) => ({
-          id: razorpayOrderId,
-          amount: order.amount,
-          currency: order.currency,
-          status: "created",
-        }),
+        create: async (order) => {
+          const createdOrder = {
+            id: razorpayOrderId,
+            amount: order.amount,
+            currency: order.currency,
+            status: "created",
+          };
+          state.razorpayOrders.push(createdOrder);
+          return createdOrder;
+        },
       };
       this.payments = {
         fetch: async (id) => ({
@@ -71,13 +85,7 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
     Types: { ObjectId: FakeObjectId },
     connection: {
       collection: () => ({
-        findOne: async () => ({
-          _id: doctorId,
-          name: "Test Doctor",
-          fees: 500,
-          specialization: "General Medicine",
-          hospital: "Test Clinic",
-        }),
+        findOne: async () => state.doctor,
       }),
     },
   };
@@ -126,6 +134,16 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
       updateMany: async () => ({ modifiedCount: 0 }),
     },
     "../models/user": { findById: async () => patient },
+    "../models/doctor": { findById: async () => state.doctor },
+    "../utils/doctorSchedule": {
+      normalizeConsultationType: (value) =>
+        String(value).toLowerCase() === "video consultation"
+          ? "Video Consultation"
+          : "Hospital Visit",
+      parseAppointmentTime: () => 600,
+      formatAppointmentTime: () => "10:00 AM",
+      validateDoctorSlot: async () => null,
+    },
     "../utils/cloudinaryUpload": async () => ({}),
     "../utils/patientReportStorage": { uploadPatientReport: async () => ({}) },
   };
@@ -160,7 +178,24 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
     assert.equal(orderResponse.body.appointment.doctorId, doctorId);
     assert.equal(orderResponse.body.appointment.status, "Pending");
     assert.equal(orderResponse.body.appointment.paymentStatus, "Pending");
+    assert.equal(orderResponse.body.appointment.fees, 500);
+    assert.equal(state.paymentRecord.amount, 500);
+    assert.equal(state.razorpayOrders[0].amount, 50000);
     assert.equal(state.paymentRecord.serviceId, appointmentId);
+
+    const mismatchedOrderResponse = await invokeJson(
+      controller.verifyDoctorPayment,
+      {
+        body: {
+          appointmentId,
+          razorpay_order_id: "order_for_another_appointment",
+          razorpay_payment_id: razorpayPaymentId,
+          razorpay_signature: "unused-before-order-match",
+        },
+      },
+    );
+    assert.equal(mismatchedOrderResponse.statusCode, 400);
+    assert.equal(state.appointment.paymentStatus, "Pending");
 
     const signature = crypto
       .createHmac("sha256", razorpaySecret)
@@ -213,6 +248,26 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
     assert.equal(state.webhookAppointmentUpdate.$set.paymentStatus, "Paid");
     assert.equal(Object.hasOwn(state.webhookAppointmentUpdate.$set, "status"), false);
     assert.equal(state.appointment.status, "Pending");
+
+    const hospitalResponse = await invokeJson(controller.createDoctorOrder, {
+      user: { id: patientId },
+      body: {
+        doctorId,
+        doctorName: "Test Doctor",
+        appointmentDate: "2026-12-01",
+        appointmentTime: "11:00 AM",
+        consultationType: "Hospital Visit",
+      },
+      files: [],
+    });
+
+    assert.equal(hospitalResponse.statusCode, 200);
+    assert.equal(hospitalResponse.body.paymentRequired, false);
+    assert.equal(hospitalResponse.body.paymentMethod, "AT_HOSPITAL");
+    assert.equal(hospitalResponse.body.appointment.fees, 800);
+    assert.equal(state.paymentRecord.amount, 800);
+    assert.equal(state.paymentRecord.paymentMethod, "AT_HOSPITAL");
+    assert.equal(state.razorpayOrders.length, 1);
   } finally {
     Module._load = originalLoad;
     delete require.cache[controllerPath];
@@ -221,6 +276,15 @@ test("paid doctor bookings stay pending until a doctor accepts them", async () =
       else process.env[key] = value;
     }
   }
+});
+
+test("legacy doctor fee remains the fallback for both appointment types", () => {
+  const { getDoctorConsultationFee } = require("../utils/doctorConsultationFees");
+  const doctor = { fees: "450" };
+
+  assert.equal(getDoctorConsultationFee(doctor, "Video Consultation"), 450);
+  assert.equal(getDoctorConsultationFee(doctor, "Hospital Visit"), 450);
+  assert.equal(getDoctorConsultationFee({ fees: "0" }, "Hospital Visit"), null);
 });
 
 async function invokeJson(handler, request) {
