@@ -109,6 +109,15 @@ const removeUnusedCloudinaryImage = async (uploaded) => {
   }
 };
 
+const parsePrescriptionRequired = (value, defaultValue = false) => {
+  if (value === undefined) return defaultValue;
+  if (value === true || String(value).trim().toLowerCase() === "true") return true;
+  if (value === false || String(value).trim().toLowerCase() === "false") return false;
+  const error = new Error("Prescription required must be true or false.");
+  error.statusCode = 400;
+  throw error;
+};
+
 const validateMedicineFields = (body, { partial = false } = {}) => {
   const medicineName = String(body.medicineName ?? "").trim();
   const price = Number(body.price);
@@ -128,6 +137,9 @@ const validateMedicineFields = (body, { partial = false } = {}) => {
     const error = new Error("Enter a valid whole number for medicine stock.");
     error.statusCode = 400;
     throw error;
+  }
+  if (body.prescriptionRequired !== undefined) {
+    parsePrescriptionRequired(body.prescriptionRequired);
   }
 };
 
@@ -181,6 +193,9 @@ const addMedicine = async (req, res) => {
       // The owner is resolved from the verified JWT, never from the request body.
       pharmacyPhone: req.pharmacy.phone,
       medicineName: String(req.body.medicineName).trim(),
+      brandName: String(req.body.brandName || "").trim(),
+      genericName: String(req.body.genericName || "").trim(),
+      prescriptionRequired: parsePrescriptionRequired(req.body.prescriptionRequired),
       category: String(req.body.category || "Tablet").trim(),
       manufacturer: String(req.body.manufacturer || "").trim(),
       description: String(req.body.description || "").trim(),
@@ -302,12 +317,15 @@ const updateMedicine = async (req, res) => {
 
     uploadedImage = await uploadMedicinePhoto(req.file);
     const changes = {};
-    for (const field of ["medicineName", "category", "manufacturer", "description", "price", "stock"]) {
+    for (const field of ["medicineName", "brandName", "genericName", "category", "manufacturer", "description", "price", "stock"]) {
       if (req.body[field] !== undefined) {
         changes[field] = ["price", "stock"].includes(field)
           ? Number(req.body[field])
           : String(req.body[field]).trim();
       }
+    }
+    if (req.body.prescriptionRequired !== undefined) {
+      changes.prescriptionRequired = parsePrescriptionRequired(req.body.prescriptionRequired);
     }
     if (uploadedImage) {
       changes.image = uploadedImage.secure_url;

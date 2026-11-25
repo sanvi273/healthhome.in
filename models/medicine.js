@@ -12,6 +12,24 @@ const medicineSchema = new mongoose.Schema(
       required: true,
     },
 
+    brandName: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 120,
+    },
+
+    genericName: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 160,
+    },
+
+    prescriptionRequired: {
+      type: Boolean,
+    },
+
     category: {
       type: String,
       default: "Tablet",
