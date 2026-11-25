@@ -6,6 +6,8 @@ const fs = require("fs");
 
 const Prescription = require("../models/prescriptionModel");
 const Appointment = require("../models/Appointment");
+const Doctor = require("../models/doctor");
+const { getPatientHealthSnapshot } = require("../utils/patientHealthSnapshot");
 
 console.log("===== PRESCRIPTION SCHEMA =====");
 console.log(Prescription.schema.obj);
@@ -435,6 +437,40 @@ const savePrescription = async (
       ...req.body,
     };
 
+    const appointmentId = String(data.appointmentId || "").trim();
+    const appointment = /^[a-f\d]{24}$/i.test(appointmentId)
+      ? await Appointment.findById(appointmentId).lean()
+      : null;
+    if (appointment) {
+      const patientPhone = String(appointment.patientPhone || data.patientPhone || "").trim();
+      const profileHealth = await getPatientHealthSnapshot(patientPhone);
+      data.patientId = patientPhone || data.patientId || "";
+      data.patientName = appointment.patientName || data.patientName || "";
+      data.patientPhone = patientPhone;
+      data.doctorId = appointment.doctorId || data.doctorId || "";
+      data.doctorName = appointment.doctorName || data.doctorName || "";
+      for (const field of [
+        "patientGender",
+        "patientBloodGroup",
+        "patientHeight",
+        "patientWeight",
+        "patientBmi",
+      ]) {
+        data[field] = appointment[field] || profileHealth[field] || data[field] || "";
+      }
+
+      const doctorId = String(data.doctorId || "").trim();
+      const doctor = /^[a-f\d]{24}$/i.test(doctorId)
+        ? await Doctor.findById(doctorId).select("emergencyNumber phone").lean()
+        : null;
+      data.doctorEmergencyNumber =
+        doctor?.emergencyNumber ||
+        appointment.doctorEmergencyNumber ||
+        doctor?.phone ||
+        data.doctorEmergencyNumber ||
+        "";
+    }
+
 
     // --------------------------------------------------------
     // LAB TESTS
@@ -696,9 +732,42 @@ const getPatientPrescriptions =
           createdAt: -1,
         });
 
+      const missingDoctorIds = [...new Set(
+        prescriptions
+          .filter((prescription) => !prescription.doctorEmergencyNumber)
+          .map((prescription) => String(prescription.doctorId || "").trim())
+          .filter((doctorId) => /^[a-f\d]{24}$/i.test(doctorId)),
+      )];
+      const doctors = missingDoctorIds.length
+        ? await Doctor.find({ _id: { $in: missingDoctorIds } })
+            .select("_id emergencyNumber phone")
+            .lean()
+        : [];
+      const doctorsById = new Map(doctors.map((doctor) => [String(doctor._id), doctor]));
+      const patientHealth = await getPatientHealthSnapshot(req.params.patientId);
+      const enrichedPrescriptions = prescriptions.map((prescription) => {
+        const serialized = prescription.toObject();
+        const doctor = doctorsById.get(String(serialized.doctorId || ""));
+        serialized.doctorEmergencyNumber =
+          serialized.doctorEmergencyNumber ||
+          doctor?.emergencyNumber ||
+          doctor?.phone ||
+          "";
+        for (const field of [
+          "patientGender",
+          "patientBloodGroup",
+          "patientHeight",
+          "patientWeight",
+          "patientBmi",
+        ]) {
+          if (!serialized[field]) serialized[field] = patientHealth[field] || "";
+        }
+        return serialized;
+      });
+
 
       res.json(
-        prescriptions
+        enrichedPrescriptions
       );
 
     } catch (e) {
@@ -742,6 +811,26 @@ const downloadPrescription = async (req, res) => {
         success: false,
         message: "Prescription not found",
       });
+    }
+
+    if (!prescription.doctorEmergencyNumber) {
+      const doctorId = String(prescription.doctorId || "").trim();
+      const doctor = /^[a-f\d]{24}$/i.test(doctorId)
+        ? await Doctor.findById(doctorId).select("emergencyNumber phone").lean()
+        : null;
+      prescription.doctorEmergencyNumber =
+        doctor?.emergencyNumber || doctor?.phone || "";
+    }
+
+    const patientHealth = await getPatientHealthSnapshot(prescription.patientPhone);
+    for (const field of [
+      "patientGender",
+      "patientBloodGroup",
+      "patientHeight",
+      "patientWeight",
+      "patientBmi",
+    ]) {
+      if (!prescription[field]) prescription[field] = patientHealth[field] || "";
     }
 
     // ==========================================================
@@ -983,6 +1072,27 @@ const downloadPrescription = async (req, res) => {
 
     write(
       `Phone : ${prescription.patientPhone || ""}`,
+      "Helvetica",
+      10.5,
+      2
+    );
+
+    write(
+      `Doctor emergency contact : ${prescription.doctorEmergencyNumber || "Not provided"}`,
+      "Helvetica",
+      10.5,
+      2
+    );
+
+    write(
+      `Gender : ${prescription.patientGender || "Not provided"}    Blood group : ${prescription.patientBloodGroup || "Not provided"}`,
+      "Helvetica",
+      10.5,
+      2
+    );
+
+    write(
+      `Height : ${prescription.patientHeight ? `${prescription.patientHeight} cm` : "Not provided"}    Weight : ${prescription.patientWeight ? `${prescription.patientWeight} kg` : "Not provided"}    BMI : ${prescription.patientBmi || "Not provided"}`,
       "Helvetica",
       10.5,
       2

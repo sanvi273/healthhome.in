@@ -30,6 +30,7 @@ const {
 // Shared helpers for consistent appointment slot validation.
 const Doctor = require("../models/doctor");
 const { getDoctorConsultationFee } = require("../utils/doctorConsultationFees");
+const { getPatientHealthSnapshots } = require("../utils/patientHealthSnapshot");
 
 const appointmentWithoutReports = (appointment) => {
   const data =
@@ -925,8 +926,20 @@ exports.getDoctorAppointments =
           .filter((patient) => patient.phone)
           .map((patient) => [patient.phone.toString().trim(), patient]),
       );
+      const healthByPhone = await getPatientHealthSnapshots(patientPhones);
       const appointmentsWithPatientImages = appointments.map((appointment) => {
         const serialized = appointmentForDoctorSchedule(appointment);
+        const patientPhone = serialized.patientPhone?.toString().trim() || "";
+        const health = healthByPhone.get(patientPhone) || {};
+        for (const field of [
+          "patientGender",
+          "patientBloodGroup",
+          "patientHeight",
+          "patientWeight",
+          "patientBmi",
+        ]) {
+          if (!serialized[field]) serialized[field] = health[field] || "";
+        }
         const patient =
           patientsById.get(String(serialized.patientId || "")) ||
           patientsByPhone.get(
@@ -1135,11 +1148,31 @@ exports.getPatientAppointments =
 
         });
 
+      const doctorIds = [...new Set(
+        appointments
+          .map((appointment) => appointment.doctorId?.toString().trim())
+          .filter((doctorId) => /^[a-f\d]{24}$/i.test(doctorId || "")),
+      )];
+      const doctors = doctorIds.length
+        ? await Doctor.find({ _id: { $in: doctorIds } })
+            .select("_id emergencyNumber phone")
+            .lean()
+        : [];
+      const doctorsById = new Map(doctors.map((doctor) => [String(doctor._id), doctor]));
+      const appointmentsWithDoctorContacts = appointments.map((appointment) => {
+        const serialized = appointmentForDoctorSchedule(appointment);
+        const doctor = doctorsById.get(String(serialized.doctorId || ""));
+        if (!serialized.doctorEmergencyNumber) {
+          serialized.doctorEmergencyNumber = doctor?.emergencyNumber || doctor?.phone || "";
+        }
+        return serialized;
+      });
+
       return res.json({
 
         success: true,
 
-        appointments,
+        appointments: appointmentsWithDoctorContacts,
 
       });
 

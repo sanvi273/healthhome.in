@@ -3,6 +3,7 @@ const Appointment = require("../models/Appointment");
 const Doctor = require("../models/doctor");
 const User = require("../models/user");
 const ReconsultationOffer = require("../models/ReconsultationOffer");
+const { getPatientHealthSnapshot } = require("../utils/patientHealthSnapshot");
 const {
   formatAppointmentTime,
   getIndiaCurrentDateTime,
@@ -433,12 +434,36 @@ exports.requestOffer = async (req, res) => {
 
     try {
       const existingAppointment = await getExistingRequest();
+      const originalAppointment = await Appointment.findById(
+        offer.originalAppointmentId,
+      ).select(
+        "patientGender patientBloodGroup patientHeight patientWeight patientBmi doctorEmergencyNumber",
+      ).lean();
+      const profileHealth = await getPatientHealthSnapshot(
+        patient.phone || offer.patientPhone,
+      );
+      const patientHealth = { ...profileHealth };
+      for (const field of [
+        "patientGender",
+        "patientBloodGroup",
+        "patientHeight",
+        "patientWeight",
+        "patientBmi",
+      ]) {
+        patientHealth[field] = originalAppointment?.[field] || patientHealth[field] || "";
+      }
       const appointment = existingAppointment || await Appointment.create({
         patientName: patient.name || offer.patientName,
         patientPhone: patient.phone || offer.patientPhone,
         patientId: patient._id,
         doctorId: offer.doctorId,
         doctorName: offer.doctorName,
+        doctorEmergencyNumber:
+          doctor.emergencyNumber ||
+          originalAppointment?.doctorEmergencyNumber ||
+          doctor.phone ||
+          "",
+        ...patientHealth,
         specialization: offer.specialization,
         hospital: offer.hospital,
         fees: 0,

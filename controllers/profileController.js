@@ -77,6 +77,7 @@ const buildCurrentProfile = async (user) => {
   if (user.role === "patient") {
     serialized.photo = profileImageUrl;
   } else if (user.role === "doctor") {
+    serialized.emergencyNumber = profile?.emergencyNumber || profile?.phone || user.phone || "";
     const legacyFee = profile?.fees ?? "";
     serialized.videoConsultationFee =
       profile?.videoConsultationFee ?? legacyFee;
@@ -115,6 +116,7 @@ const editableFieldsByRole = {
   doctor: [
     "specialization",
     "experience",
+    "emergencyNumber",
     "fees",
     "videoConsultationFee",
     "hospitalVisitFee",
@@ -185,6 +187,15 @@ exports.updateMyProfile = async (req, res) => {
     }
 
     if (user.role === "doctor") {
+      if (updates.emergencyNumber !== undefined && updates.emergencyNumber) {
+        if (!/^\+?[0-9][0-9\s().-]{6,30}$/.test(updates.emergencyNumber)) {
+          return res.status(400).json({
+            success: false,
+            message: "Enter a valid emergency contact number.",
+          });
+        }
+      }
+
       const hasVideoFee = Object.prototype.hasOwnProperty.call(
         req.body || {},
         "videoConsultationFee",

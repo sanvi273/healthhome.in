@@ -16,6 +16,7 @@ const {
   validateDoctorSlot,
 } = require("../utils/doctorSchedule");
 const { getDoctorConsultationFee } = require("../utils/doctorConsultationFees");
+const { getPatientHealthSnapshot } = require("../utils/patientHealthSnapshot");
 
 const appointmentWithoutReports = (appointment) => {
   const data =
@@ -773,6 +774,8 @@ exports.createDoctorOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Doctor not found." });
     }
 
+    const patientHealth = await getPatientHealthSnapshot(patientPhone);
+
     const amount = getDoctorConsultationFee(doctor, normalizedConsultationType);
     if (amount === null) {
       return res.status(400).json({ success: false, message: "Invalid doctor consultation fee in database." });
@@ -809,8 +812,10 @@ exports.createDoctorOrder = async (req, res) => {
       patientPhone,
       doctorId: String(doctorId),
       doctorName: String(doctor.name || doctorName || "Doctor").trim(),
+      doctorEmergencyNumber: String(doctor.emergencyNumber || doctor.phone || "").trim(),
       specialization: String(doctor.specialization || specialization || "").trim(),
       hospital: String(doctor.hospital || hospital || "").trim(),
+      ...patientHealth,
       consultationType: normalizedConsultationType,
       appointmentDate: String(appointmentDate).trim(),
       appointmentTime: normalizedAppointmentTime,

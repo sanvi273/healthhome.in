@@ -56,6 +56,13 @@ const doctorSchema = new mongoose.Schema(
       trim: true,
     },
 
+    emergencyNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 32,
+    },
+
     specialization: {
       type: String,
       required: true,

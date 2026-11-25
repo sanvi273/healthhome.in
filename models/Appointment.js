@@ -22,6 +22,12 @@ const appointmentSchema = new mongoose.Schema(
       trim: true,
     },
 
+    patientGender: { type: String, default: "", trim: true },
+    patientBloodGroup: { type: String, default: "", trim: true },
+    patientHeight: { type: String, default: "", trim: true },
+    patientWeight: { type: String, default: "", trim: true },
+    patientBmi: { type: String, default: "", trim: true },
+
     patientId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "User",
@@ -133,6 +139,13 @@ const appointmentSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+
+    doctorEmergencyNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 32,
     },
 
     specialization: {

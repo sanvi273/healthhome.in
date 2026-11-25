@@ -32,6 +32,12 @@ const prescriptionSchema = new mongoose.Schema(
       default: "",
     },
 
+    patientGender: { type: String, default: "", trim: true },
+    patientBloodGroup: { type: String, default: "", trim: true },
+    patientHeight: { type: String, default: "", trim: true },
+    patientWeight: { type: String, default: "", trim: true },
+    patientBmi: { type: String, default: "", trim: true },
+
     // =====================================================
     // DOCTOR DETAILS
     // =====================================================
@@ -44,6 +50,13 @@ const prescriptionSchema = new mongoose.Schema(
     doctorName: {
       type: String,
       default: "",
+    },
+
+    doctorEmergencyNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 32,
     },
 
     // =====================================================

@@ -214,6 +214,7 @@ const getDoctors = async (req, res) => {
     );
     const doctorsWithImages = doctors.map((doctor) => {
       const serialized = doctor.toObject();
+      serialized.emergencyNumber = doctor.emergencyNumber || doctor.phone || "";
       const owner =
         usersById.get(String(doctor.userId || "")) ||
         usersByPhone.get(doctor.phone);
@@ -275,6 +276,7 @@ const getDoctorProfile = async (req, res) => {
 
     const [doctorWithRating] = await attachRatingSummaries("doctor", [{
       ...doctor.toObject(),
+      emergencyNumber: doctor.emergencyNumber || doctor.phone || "",
       profileImageUrl: user.profileImage || doctor.profileImageUrl || "",
       profileImagePublicId: user.profileImagePublicId || doctor.profileImagePublicId || "",
     }]);
