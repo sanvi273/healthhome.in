@@ -53,8 +53,8 @@ test("MSG91 Widget access-token validation sends Auth Key in the documented head
     assert.equal(result.type, "success");
     assert.match(captured.url, /\/widget\/verifyAccessToken$/);
     assert.equal(captured.options.headers.authkey, "unit-test-auth-key");
-    assert.equal(new URLSearchParams(captured.options.body).get("access-token"), "unit-test-access-token");
-    assert.equal(new URLSearchParams(captured.options.body).has("authkey"), false);
+    assert.equal(captured.options.headers["content-type"], "application/json");
+    assert.deepEqual(JSON.parse(captured.options.body), { "access-token": "unit-test-access-token" });
   } finally {
     global.fetch = originalFetch;
     if (originalAuthKey === undefined) delete process.env.MSG91_AUTH_KEY;

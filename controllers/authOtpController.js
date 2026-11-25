@@ -14,8 +14,8 @@ const {
   associateAcceptance,
 } = require("../services/termsAcceptanceService");
 
-const MSG91 = "https://control.msg91.com/api/v5/widget";
-const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const MSG91 = "https://api.msg91.com/api/v5/widget";
+const CHALLENGE_TTL_MS = 15 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 const MAX_RESENDS = 2;
 const allowedRoles = ["patient", "doctor", "laboratory", "pharmacy", "admin"];
@@ -70,7 +70,7 @@ async function msg91(path, payload, { otpVerification = false } = {}) {
     }
     return data;
   } catch (error) {
-    if (error.message === "OTP_PROVIDER_FAILURE") throw error;
+    if (error.message === "OTP_PROVIDER_FAILURE" || error.message === "OTP_TOKEN_INVALID") throw error;
     console.error("MSG91 widget request failed", { path, errorType: error.name || "NetworkError" });
     throw new Error("OTP_PROVIDER_FAILURE");
   }
@@ -93,11 +93,11 @@ async function verifyWidgetAccessToken(token) {
   const response = await fetch(`${MSG91}/verifyAccessToken`, {
     method: "POST",
     headers: {
-      "content-type": "application/x-www-form-urlencoded",
+      "content-type": "application/json",
       accept: "application/json",
       authkey: authKey,
     },
-    body: new URLSearchParams({ "access-token": token }),
+    body: JSON.stringify({ "access-token": token }),
     signal: AbortSignal.timeout(10000),
   });
   const data = await response.json().catch(() => ({}));
@@ -455,7 +455,7 @@ const resendLogin = async (req, res) => {
     const elapsed = Date.now() - challenge.lastSentAt.getTime();
     if (elapsed < RESEND_COOLDOWN_MS) return res.status(429).json({ success: false, retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000), message: "Please wait before requesting another code." });
     if (challenge.resendCount >= MAX_RESENDS) return res.status(429).json({ success: false, message: "Resend limit reached. Please start again." });
-    const data = await msg91("retryOtp", { reqId: challenge.msg91RequestId, retryChannel: 11 });
+    const data = await msg91("retryOtp", { reqId: challenge.msg91RequestId });
     if (data.type !== "success") return providerFailure(res, "OTP_PROVIDER_FAILURE");
     challenge.resendCount += 1;
     challenge.lastSentAt = new Date();
