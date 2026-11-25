@@ -29,6 +29,7 @@ const adminRoutes = require("./routes/adminRoutes");
 const videoCallRoutes = require("./routes/videoCallRoutes");
 const reconsultationRoutes = require("./routes/reconsultationRoutes");
 const termsRoutes = require("./routes/termsRoutes");
+const ratingRoutes = require("./routes/ratingRoutes");
 const VideoCallSession = require("./models/VideoCallSession");
 
 // ============================================================
@@ -88,6 +89,7 @@ app.use(
 );
 
 app.use("/api/terms", termsRoutes);
+app.use("/api/ratings", ratingRoutes);
 
 // ============================================================
 // DOCTOR ROUTES

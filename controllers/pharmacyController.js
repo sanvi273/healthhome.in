@@ -1,5 +1,6 @@
 const Pharmacy = require("../models/pharmacy");
 const User = require("../models/user");
+const { attachRatingSummaries } = require("../utils/ratingSummary");
 
 const normalizePhoneForOwnership = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
@@ -126,10 +127,11 @@ const getPharmacies = async (req, res) => {
         owner?.profileImagePublicId || serialized.profileImagePublicId || "";
       return serialized;
     });
+    const pharmaciesWithRatings = await attachRatingSummaries("pharmacy", pharmaciesWithImages);
 
     return res.status(200).json({
       success: true,
-      pharmacies: pharmaciesWithImages,
+      pharmacies: pharmaciesWithRatings,
     });
   } catch (error) {
     console.error(
@@ -194,15 +196,15 @@ const getPharmacyProfile = async (req, res) => {
       role: "pharmacy",
     }).select("profileImage profileImagePublicId").lean();
 
+    const [pharmacyWithRating] = await attachRatingSummaries("pharmacy", [{
+      ...pharmacy.toObject(),
+      profileImageUrl: owner?.profileImage || pharmacy.profileImageUrl || pharmacy.image || "",
+      profileImagePublicId: owner?.profileImagePublicId || pharmacy.profileImagePublicId || "",
+    }]);
+
     return res.status(200).json({
       success: true,
-      pharmacy: {
-        ...pharmacy.toObject(),
-        profileImageUrl:
-          owner?.profileImage || pharmacy.profileImageUrl || pharmacy.image || "",
-        profileImagePublicId:
-          owner?.profileImagePublicId || pharmacy.profileImagePublicId || "",
-      },
+      pharmacy: pharmacyWithRating,
     });
   } catch (error) {
     console.error(

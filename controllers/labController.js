@@ -1,5 +1,6 @@
 const Lab = require("../models/lab");
 const User = require("../models/user");
+const { attachRatingSummaries } = require("../utils/ratingSummary");
 // ============================================================
 // ADD LAB
 // ============================================================
@@ -148,10 +149,11 @@ const getLabs = async (req, res) => {
         owner?.profileImagePublicId || serialized.profileImagePublicId || "";
       return serialized;
     });
+    const labsWithRatings = await attachRatingSummaries("laboratory", labsWithImages);
 
     res.status(200).json({
       success: true,
-      labs: labsWithImages,
+      labs: labsWithRatings,
     });
   } catch (error) {
     res.status(500).json({
@@ -183,15 +185,15 @@ const getLabProfile = async (req, res) => {
       role: "laboratory",
     }).select("profileImage profileImagePublicId").lean();
 
+    const [labWithRating] = await attachRatingSummaries("laboratory", [{
+      ...lab.toObject(),
+      profileImageUrl: owner?.profileImage || lab.profileImageUrl || lab.image || "",
+      profileImagePublicId: owner?.profileImagePublicId || lab.profileImagePublicId || "",
+    }]);
+
     return res.status(200).json({
       success: true,
-      lab: {
-        ...lab.toObject(),
-        profileImageUrl:
-          owner?.profileImage || lab.profileImageUrl || lab.image || "",
-        profileImagePublicId:
-          owner?.profileImagePublicId || lab.profileImagePublicId || "",
-      },
+      lab: labWithRating,
     });
   } catch (error) {
     return res.status(500).json({

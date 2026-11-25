@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Doctor = require("../models/doctor");
 const User = require("../models/user");
+const { attachRatingSummaries } = require("../utils/ratingSummary");
 
 const WEEKDAYS = [
   "Monday",
@@ -222,10 +223,11 @@ const getDoctors = async (req, res) => {
         owner?.profileImagePublicId || serialized.profileImagePublicId || "";
       return serialized;
     });
+    const doctorsWithRatings = await attachRatingSummaries("doctor", doctorsWithImages);
 
     return res.status(200).json({
       success: true,
-      doctors: doctorsWithImages,
+      doctors: doctorsWithRatings,
     });
   } catch (error) {
     return res.status(500).json({
@@ -271,15 +273,15 @@ const getDoctorProfile = async (req, res) => {
       });
     }
 
+    const [doctorWithRating] = await attachRatingSummaries("doctor", [{
+      ...doctor.toObject(),
+      profileImageUrl: user.profileImage || doctor.profileImageUrl || "",
+      profileImagePublicId: user.profileImagePublicId || doctor.profileImagePublicId || "",
+    }]);
+
     return res.status(200).json({
       success: true,
-      doctor: {
-        ...doctor.toObject(),
-        profileImageUrl:
-          user.profileImage || doctor.profileImageUrl || "",
-        profileImagePublicId:
-          user.profileImagePublicId || doctor.profileImagePublicId || "",
-      },
+      doctor: doctorWithRating,
     });
   } catch (error) {
     return res.status(500).json({
