@@ -6,6 +6,7 @@ const verificationMiddleware = require("../middleware/verificationMiddleware");
 const {
   listDoctorPrescriptionTemplates,
   createDoctorPrescriptionTemplate,
+  updateDoctorPrescriptionTemplate,
   deleteDoctorPrescriptionTemplate,
 } = require("../controllers/doctorPrescriptionTemplateController");
 
@@ -42,6 +43,13 @@ router.post(
   authMiddleware,
   approvedDoctor,
   createDoctorPrescriptionTemplate,
+);
+
+router.put(
+  "/templates/:templateId",
+  authMiddleware,
+  approvedDoctor,
+  updateDoctorPrescriptionTemplate,
 );
 
 router.delete(

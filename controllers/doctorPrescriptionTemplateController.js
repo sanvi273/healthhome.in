@@ -108,6 +108,39 @@ exports.createDoctorPrescriptionTemplate = async (req, res) => {
   }
 };
 
+exports.updateDoctorPrescriptionTemplate = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.templateId)) {
+      return res.status(400).json({ success: false, message: "Invalid template ID." });
+    }
+
+    const doctor = await getOwnedDoctor(req);
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: "Doctor profile not found." });
+    }
+
+    const templateData = normalizeTemplate(req.body);
+    const validationMessage = validateTemplate(templateData);
+    if (validationMessage) {
+      return res.status(400).json({ success: false, message: validationMessage });
+    }
+
+    const template = await DoctorPrescriptionTemplate.findOneAndUpdate(
+      { _id: req.params.templateId, doctorId: doctor._id },
+      { $set: templateData },
+      { new: true, runValidators: true },
+    );
+    if (!template) {
+      return res.status(404).json({ success: false, message: "Prescription template not found." });
+    }
+
+    return res.json({ success: true, template });
+  } catch (error) {
+    console.error("UPDATE DOCTOR PRESCRIPTION TEMPLATE ERROR:", error.message);
+    return res.status(500).json({ success: false, message: "Unable to update this prescription template." });
+  }
+};
+
 exports.deleteDoctorPrescriptionTemplate = async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.templateId)) {
