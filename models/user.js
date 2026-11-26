@@ -98,7 +98,10 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: true,
+      // Existing accounts keep their password hash; new Firebase OTP accounts
+      // intentionally have no local password.
+      required: false,
+      select: false,
     },
 
     passwordChangedAt: {

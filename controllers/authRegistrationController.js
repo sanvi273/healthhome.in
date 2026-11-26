@@ -1,31 +1,16 @@
-const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto");
 const User = require("../models/user");
 const AuthRateLimit = require("../models/authRateLimit");
 const Verification = require("../models/verification");
 const { generateVerificationId } = require("./authController");
-const {
-  getCurrentTerms,
-  findAcceptanceToken,
-  findAcceptanceById,
-  associateAcceptance,
-} = require("../services/termsAcceptanceService");
+const firebaseAdminAuth = require("../services/firebaseAdminAuth");
+const termsAcceptanceService = require("../services/termsAcceptanceService");
 
 const ipWindows = new Map();
 
-function normalizePhone(input) {
-  const value = String(input || "").trim().replace(/[\s()-]/g, "");
-  if (!/^\+?[1-9]\d{7,14}$/.test(value)) return null;
-  const digits = value.startsWith("+") ? value.slice(1) : value;
-  if (/^[6-9]\d{9}$/.test(digits)) return `91${digits}`;
-  return digits;
-}
-
-function phoneQuery(phone) {
-  const variants = [phone, `+${phone}`];
-  if (/^91[6-9]\d{9}$/.test(phone)) variants.push(phone.slice(2));
-  return { $in: variants };
+function normalizeRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  return role === "lab" ? "laboratory" : role;
 }
 
 function allowIp(ip) {
@@ -42,7 +27,10 @@ function allowIp(ip) {
 
 async function incrementPhoneRateLimit(phone) {
   const bucket = Math.floor(Date.now() / (60 * 60 * 1000));
-  const valueHash = crypto.createHash("sha256").update(`phone:${phone}`).digest("hex");
+  const valueHash = require("crypto")
+    .createHash("sha256")
+    .update(`phone:${phone}`)
+    .digest("hex");
   const id = `phone:${valueHash}:${bucket}`;
   const expiresAt = new Date((bucket + 1) * 60 * 60 * 1000 + 60 * 1000);
   const counter = await AuthRateLimit.findOneAndUpdate(
@@ -54,8 +42,8 @@ async function incrementPhoneRateLimit(phone) {
 }
 
 async function createRegisteredAccount(data, termsAcceptanceId) {
-  const currentTerms = getCurrentTerms(data.role);
-  const acceptance = await findAcceptanceById(
+  const currentTerms = termsAcceptanceService.getCurrentTerms(data.role);
+  const acceptance = await termsAcceptanceService.findAcceptanceById(
     termsAcceptanceId,
     data.role,
     currentTerms,
@@ -65,10 +53,11 @@ async function createRegisteredAccount(data, termsAcceptanceId) {
 
   const professional = ["doctor", "laboratory", "pharmacy"].includes(data.role);
   const verificationId = professional ? await generateVerificationId(data.role) : "";
+  // Firebase proves phone ownership. Mongo keeps the HealthHome identity and
+  // profile data; there is deliberately no local password for new accounts.
   const user = await User.create({
     name: data.name,
     email: data.email,
-    password: data.password,
     role: data.role,
     phone: data.phone,
     accountStatus: "ACTIVE",
@@ -103,7 +92,7 @@ async function createRegisteredAccount(data, termsAcceptanceId) {
       });
     }
 
-    const acceptanceLinked = await associateAcceptance(
+    const acceptanceLinked = await termsAcceptanceService.associateAcceptance(
       termsAcceptanceId,
       user._id,
       data.role,
@@ -121,14 +110,27 @@ async function createRegisteredAccount(data, termsAcceptanceId) {
 
 const registerUser = async (req, res) => {
   try {
-    if (!allowIp(req.ip)) return res.status(429).json({ success: false, message: "Please try again later." });
+    if (!allowIp(req.ip || "unknown")) {
+      return res.status(429).json({ success: false, message: "Please try again later." });
+    }
+
     const {
-      name, email, password, role, phone, label, fullAddress, landmark,
-      city, state, pincode, latitude, longitude, termsAcceptanceToken,
-    } = req.body;
-    const normalizedPhone = normalizePhone(phone);
-    const normalizedEmail = String(email || "").trim().toLowerCase();
-    const normalizedRole = String(role || "").trim().toLowerCase();
+      idToken,
+      name,
+      role,
+      label,
+      fullAddress,
+      landmark,
+      city,
+      state,
+      pincode,
+      latitude,
+      longitude,
+      termsAcceptanceToken,
+    } = req.body || {};
+
+    const identity = await firebaseAdminAuth.verifyFirebaseIdToken(idToken);
+    const normalizedRole = normalizeRole(role);
     const normalizedName = String(name || "").trim();
     const normalizedLabel = String(label || "").trim();
     const normalizedAddress = String(fullAddress || "").trim();
@@ -136,26 +138,49 @@ const registerUser = async (req, res) => {
     const normalizedState = String(state || "").trim();
     const normalizedPincode = String(pincode || "").trim();
 
-    if (!normalizedName || !normalizedEmail || typeof password !== "string" || !normalizedPhone ||
+    if (!normalizedName ||
         !["patient", "doctor", "laboratory", "pharmacy"].includes(normalizedRole) ||
-        !normalizedLabel || !normalizedAddress || !normalizedCity || !normalizedState || !/^\d{6}$/.test(normalizedPincode)) {
+        !normalizedLabel || !normalizedAddress || !normalizedCity || !normalizedState ||
+        !/^\d{6}$/.test(normalizedPincode)) {
       return res.status(400).json({ success: false, message: "Please complete all required registration fields." });
     }
-    if (password.length < 6 || password.length > 128) return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
 
-    const currentTerms = getCurrentTerms(normalizedRole);
-    const termsAcceptance = await findAcceptanceToken(termsAcceptanceToken, normalizedRole, currentTerms);
-    if (!termsAcceptance) return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms for this role before registering." });
-    const exists = await User.findOne({ $or: [{ email: normalizedEmail }, { phone: phoneQuery(normalizedPhone) }] }).select("_id").lean();
-    if (exists) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
+    const currentTerms = termsAcceptanceService.getCurrentTerms(normalizedRole);
+    const termsAcceptance = await termsAcceptanceService.findAcceptanceToken(
+      termsAcceptanceToken,
+      normalizedRole,
+      currentTerms,
+    );
+    if (!termsAcceptance) {
+      return res.status(428).json({
+        success: false,
+        code: "TERMS_ACCEPTANCE_REQUIRED",
+        message: "Please review and accept the current terms for this role before registering.",
+      });
+    }
 
+    const emailDigits = identity.storedPhone.replace(/\D/g, "");
+    const email = `${emailDigits}@gmail.com`;
+    const exists = await User.findOne({
+      $or: [
+        { email },
+        { phone: firebaseAdminAuth.phoneLookupQuery(identity.normalizedPhone) },
+      ],
+    }).select("_id").lean();
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        code: "ACCOUNT_ALREADY_EXISTS",
+        message: "An account already uses that phone number. Please sign in instead.",
+      });
+    }
+
+    await incrementPhoneRateLimit(identity.normalizedPhone);
     const registrationData = {
       name: normalizedName,
-      email: normalizedEmail,
-      password: await bcrypt.hash(password, 10),
+      email,
       role: normalizedRole,
-      phone: String(phone).trim(),
+      phone: identity.storedPhone,
       label: normalizedLabel,
       fullAddress: normalizedAddress,
       landmark: String(landmark || "").trim(),
@@ -165,11 +190,15 @@ const registerUser = async (req, res) => {
       latitude: latitude == null || latitude === "" ? null : Number(latitude),
       longitude: longitude == null || longitude === "" ? null : Number(longitude),
     };
-    await incrementPhoneRateLimit(normalizedPhone);
-    const { user, professional } = await createRegisteredAccount(registrationData, termsAcceptance._id);
-    const token = professional
-      ? jwt.sign({ id: user._id, role: user.role, verificationStatus: user.verificationStatus }, process.env.JWT_SECRET, { expiresIn: "7d" })
-      : undefined;
+    const { user, professional } = await createRegisteredAccount(
+      registrationData,
+      termsAcceptance._id,
+    );
+    const token = jwt.sign(
+      { id: user._id, role: user.role, verificationStatus: user.verificationStatus },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" },
+    );
 
     return res.status(201).json({
       success: true,
@@ -177,6 +206,7 @@ const registerUser = async (req, res) => {
       message: professional
         ? "Registration submitted. Your account is pending verification."
         : "Account created successfully.",
+      token,
       user: {
         _id: user._id,
         name: user.name,
@@ -187,15 +217,52 @@ const registerUser = async (req, res) => {
         verificationStatus: user.verificationStatus,
         verificationId: user.verificationId,
       },
-      ...(token ? { token } : {}),
     });
   } catch (error) {
-    if (error.message === "AUTH_RATE_LIMIT") return res.status(429).json({ success: false, message: "Too many registration requests. Please try later." });
-    if (error.message === "TERMS_ACCEPTANCE_REQUIRED") return res.status(428).json({ success: false, code: "TERMS_ACCEPTANCE_REQUIRED", message: "Please review and accept the current terms before registering." });
-    if (error.message === "TERMS_ACCEPTANCE_LINK_FAILED") return res.status(409).json({ success: false, message: "Unable to link your terms acceptance. Please accept the current terms and register again." });
-    if (error.code === 11000) return res.status(409).json({ success: false, message: "An account already uses that email or mobile number." });
-    console.error("REGISTRATION FAILED");
-    return res.status(500).json({ success: false, message: "Unable to start registration. Please try again." });
+    if (error.code === "FIREBASE_ADMIN_CONFIG" ||
+        error.code === "FIREBASE_ADMIN_UNAVAILABLE" ||
+        error.code === "FIREBASE_ADMIN_PROJECT_MISMATCH") {
+      console.error("FIREBASE ADMIN AUTH CONFIGURATION ERROR", error.code);
+      return res.status(503).json({
+        success: false,
+        code: "FIREBASE_AUTH_UNAVAILABLE",
+        message: "Phone sign-in is temporarily unavailable. Please try again later.",
+      });
+    }
+    if (error.code === "FIREBASE_ID_TOKEN_INVALID" ||
+        error.code === "FIREBASE_PHONE_MISSING" ||
+        String(error.code || "").startsWith("auth/")) {
+      return res.status(401).json({
+        success: false,
+        code: "FIREBASE_ID_TOKEN_INVALID",
+        message: "Phone verification expired. Please request and verify a new OTP.",
+      });
+    }
+    if (error.message === "AUTH_RATE_LIMIT") {
+      return res.status(429).json({ success: false, message: "Too many registration requests. Please try later." });
+    }
+    if (error.message === "TERMS_ACCEPTANCE_REQUIRED") {
+      return res.status(428).json({
+        success: false,
+        code: "TERMS_ACCEPTANCE_REQUIRED",
+        message: "Please review and accept the current terms before registering.",
+      });
+    }
+    if (error.message === "TERMS_ACCEPTANCE_LINK_FAILED") {
+      return res.status(409).json({
+        success: false,
+        message: "Unable to link your terms acceptance. Please accept the current terms and register again.",
+      });
+    }
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        code: "ACCOUNT_ALREADY_EXISTS",
+        message: "An account already uses that phone number. Please sign in instead.",
+      });
+    }
+    console.error("REGISTRATION FAILED", error.message);
+    return res.status(500).json({ success: false, message: "Unable to complete registration. Please try again." });
   }
 };
 

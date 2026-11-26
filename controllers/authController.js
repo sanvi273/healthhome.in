@@ -1,37 +1,11 @@
 
 const User = require("../models/user");
-const {
-    getCurrentTerms,
-    findAcceptanceToken,
-    hasCurrentAcceptance,
-    associateAcceptance,
-} = require("../services/termsAcceptanceService");
+const termsAcceptanceService = require("../services/termsAcceptanceService");
+const firebaseAdminAuth = require("../services/firebaseAdminAuth");
 const Verification = require("../models/verification");
 const VerificationCounter = require("../models/verificationCounter");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-
-const normalizePhoneForLookup = (input) => {
-    const value = String(input || "").trim().replace(/[\s()-]/g, "");
-    if (!/^\+?[1-9]\d{7,14}$/.test(value)) return null;
-
-    const digits = value.replace(/\D/g, "");
-    return /^[6-9]\d{9}$/.test(digits) ? `91${digits}` : digits;
-};
-
-const phoneLookupQuery = (normalizedPhone) => {
-    const variants = new Set([normalizedPhone, `+${normalizedPhone}`]);
-    if (/^91[6-9]\d{9}$/.test(normalizedPhone)) {
-        variants.add(normalizedPhone.slice(2));
-    }
-
-    const formattedVariants = [...variants].map((variant) => {
-        const digits = variant.replace(/\D/g, "");
-        return new RegExp(`^\\+?${digits.split("").join("[\\s().-]*")}$`);
-    });
-
-    return { $in: [...variants, ...formattedVariants] };
-};
 
 // ============================================================
 // GENERATE HEALTHHOME VERIFICATION ID
@@ -326,61 +300,47 @@ const registerUser = async (req, res) => {
 const loginUser = async (req, res) => {
     try {
         const {
-            phone,
-            password,
+            idToken,
             role,
             termsAcceptanceToken,
-        } = req.body;
+        } = req.body || {};
 
-        // VALIDATE
-        if (!phone || !password) {
-            return res.status(400).json({
-                success: false,
-                message: "Phone and password are required",
-            });
-        }
-
-        // FIND USER BY PHONE
+        // Firebase verifies the OTP on-device. The backend verifies the
+        // resulting signed ID token and uses its phone claim as the identity.
+        const identity = await firebaseAdminAuth.verifyFirebaseIdToken(idToken);
         const requestedRole = String(role || "").trim().toLowerCase();
         const normalizedRole = requestedRole === "lab" ? "laboratory" : requestedRole;
         if (!["patient", "doctor", "laboratory", "pharmacy", "admin"].includes(normalizedRole)) {
             return res.status(400).json({ success: false, message: "Please select a valid account role." });
         }
 
-        const normalizedPhone = normalizePhoneForLookup(phone);
-        if (!normalizedPhone) {
-            return res.status(400).json({
-                success: false,
-                message: "Please enter a valid phone number.",
-            });
-        }
+        const matches = await User.find({
+            phone: firebaseAdminAuth.phoneLookupQuery(identity.normalizedPhone),
+        }).limit(2);
 
-        const roleVariants = normalizedRole === "laboratory"
-            ? ["laboratory", "lab"]
-            : [normalizedRole];
-
-        const user = await User.findOne({
-            phone: phoneLookupQuery(normalizedPhone),
-            role: { $in: roleVariants },
-        });
-
-        if (!user) {
+        if (!matches.length) {
             return res.status(404).json({
                 success: false,
-                message: "User not found",
+                code: "ACCOUNT_NOT_FOUND",
+                message: "No HealthHome account uses this verified phone number. Please sign up.",
             });
         }
-
-        // CHECK PASSWORD
-        const isMatch = await bcrypt.compare(
-            password,
-            user.password
-        );
-
-        if (!isMatch) {
-            return res.status(400).json({
+        if (matches.length > 1) {
+            return res.status(409).json({
                 success: false,
-                message: "Invalid password",
+                code: "DUPLICATE_PHONE_ACCOUNTS",
+                message: "More than one HealthHome account uses this phone number. Please contact support.",
+            });
+        }
+        const user = matches[0];
+
+        const storedRole = String(user.role || "").trim().toLowerCase();
+        const normalizedStoredRole = storedRole === "lab" ? "laboratory" : storedRole;
+        if (normalizedStoredRole !== normalizedRole) {
+            return res.status(403).json({
+                success: false,
+                code: "ACCOUNT_ROLE_MISMATCH",
+                message: "This phone number is registered under a different account type. Please select that role.",
             });
         }
 
@@ -394,16 +354,16 @@ const loginUser = async (req, res) => {
             });
         }
 
-        if (normalizedRole !== "admin") {
-            const currentTerms = getCurrentTerms(normalizedRole);
-            if (!await hasCurrentAcceptance(user._id, normalizedRole, currentTerms)) {
-                const acceptance = await findAcceptanceToken(
+        if (normalizedStoredRole !== "admin") {
+            const currentTerms = termsAcceptanceService.getCurrentTerms(normalizedStoredRole);
+            if (!await termsAcceptanceService.hasCurrentAcceptance(user._id, normalizedStoredRole, currentTerms)) {
+                const acceptance = await termsAcceptanceService.findAcceptanceToken(
                     termsAcceptanceToken,
-                    normalizedRole,
+                    normalizedStoredRole,
                     currentTerms,
                     user._id,
                 );
-                if (!acceptance || !await associateAcceptance(acceptance._id, user._id, normalizedRole, currentTerms)) {
+                if (!acceptance || !await termsAcceptanceService.associateAcceptance(acceptance._id, user._id, normalizedStoredRole, currentTerms)) {
                     return res.status(428).json({
                         success: false,
                         code: "TERMS_ACCEPTANCE_REQUIRED",
@@ -417,6 +377,7 @@ const loginUser = async (req, res) => {
         const isProfessional =
             user.role === "doctor" ||
             user.role === "laboratory" ||
+            user.role === "lab" ||
             user.role === "pharmacy";
 
         // CREATE JWT TOKEN
@@ -476,11 +437,30 @@ const loginUser = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("LOGIN ERROR:", error);
+        if (error.code === "FIREBASE_ADMIN_CONFIG" ||
+            error.code === "FIREBASE_ADMIN_UNAVAILABLE" ||
+            error.code === "FIREBASE_ADMIN_PROJECT_MISMATCH") {
+            console.error("FIREBASE ADMIN AUTH CONFIGURATION ERROR", error.code);
+            return res.status(503).json({
+                success: false,
+                code: "FIREBASE_AUTH_UNAVAILABLE",
+                message: "Phone sign-in is temporarily unavailable. Please try again later.",
+            });
+        }
+        if (error.code === "FIREBASE_ID_TOKEN_INVALID" ||
+            error.code === "FIREBASE_PHONE_MISSING" ||
+            String(error.code || "").startsWith("auth/")) {
+            return res.status(401).json({
+                success: false,
+                code: "FIREBASE_ID_TOKEN_INVALID",
+                message: "Phone verification expired. Please request and verify a new OTP.",
+            });
+        }
+        console.error("LOGIN ERROR:", error.message);
 
         return res.status(500).json({
             success: false,
-            message: error.message,
+            message: "Unable to sign in right now. Please try again.",
         });
     }
 };
@@ -535,7 +515,6 @@ const updateOneSignalId = async (req, res) => {
 // ============================================================
 
 module.exports = {
-    registerUser,
     loginUser,
     updateOneSignalId,
     generateVerificationId,
