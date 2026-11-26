@@ -91,6 +91,7 @@ const addDoctor = async (req, res) => {
       videoConsultationFee,
       hospitalVisitFee,
       hospital,
+      address,
       about,
     } = req.body;
 
@@ -121,6 +122,16 @@ const addDoctor = async (req, res) => {
       });
     }
 
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, "address") &&
+      String(address ?? "").trim().length > 2000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "address is too long.",
+      });
+    }
+
     const profileFields = {
       userId: user._id,
       name: String(name).trim(),
@@ -133,6 +144,9 @@ const addDoctor = async (req, res) => {
       videoConsultationFee: videoFee,
       hospitalVisitFee: hospitalFee,
       hospital: String(hospital).trim(),
+      ...(Object.prototype.hasOwnProperty.call(req.body || {}, "address")
+        ? { address: String(address ?? "").trim() }
+        : {}),
       about: about == null ? "" : String(about).trim(),
     };
 

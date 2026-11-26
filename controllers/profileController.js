@@ -121,6 +121,7 @@ const editableFieldsByRole = {
     "videoConsultationFee",
     "hospitalVisitFee",
     "hospital",
+    "address",
     "about",
   ],
   laboratory: ["labType", "experience", "address"],

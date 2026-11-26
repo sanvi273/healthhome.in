@@ -99,6 +99,13 @@ const doctorSchema = new mongoose.Schema(
       trim: true,
     },
 
+    address: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 2000,
+    },
+
     about: {
       type: String,
       default: "",
