@@ -2526,10 +2526,7 @@ saveDeliveryOtpForDemo(
       // TESTING ONLY
       // ======================================================
       //
-      // Currently MSG91 is NOT being used.
-      //
-      // Therefore return the OTP in the API response
-      // so we can test the complete flow.
+      // Return the OTP in the API response so we can test the complete flow.
       //
       // Later, when Patient-side OTP UI is ready,
       // this can be changed.

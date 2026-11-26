@@ -2,9 +2,8 @@ const express = require("express");
 
 console.log("✅ authRoutes.js loaded");
 
-const { updateOneSignalId } = require("../controllers/authController");
-
-const { initiateLogin, verifyLogin, resendLogin, initiateRegistration, verifyRegistration } = require("../controllers/authOtpController");
+const { updateOneSignalId, loginUser } = require("../controllers/authController");
+const { registerUser } = require("../controllers/authRegistrationController");
 const router = express.Router();
 
 // ============================================================
@@ -13,21 +12,15 @@ const router = express.Router();
 
 router.post(
     "/register",
-    initiateRegistration
+    registerUser
 );
-router.post("/register/verify", verifyRegistration);
 
 // ============================================================
 // LOGIN
 // ============================================================
 
-// Keep the legacy URL on the same OTP-required flow so older app builds
-// cannot receive a session token from password-only authentication.
-router.post("/login", initiateLogin);
-router.post("/login/initiate", initiateLogin);
-router.post("/login/verify", verifyLogin);
-router.post("/otp/resend", resendLogin);
-router.post("/login/resend", resendLogin);
+router.post("/login", loginUser);
+
 // ============================================================
 // UPDATE ONESIGNAL ID
 // ============================================================
